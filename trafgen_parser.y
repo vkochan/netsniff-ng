@@ -324,10 +324,10 @@ static void set_dynamic_incdec(uint8_t start, uint8_t stop, uint8_t stepping,
 
 %token ',' '{' '}' '(' ')' '[' ']' ':' '-' '+' '*' '/' '%' '&' '|' '<' '>' '^'
 
-%token number string
+%token number string name
 
 %type <number> number expression
-%type <str> string
+%type <str> string name param value
 
 %left '-' '+' '*' '/' '%' '&' '|' '<' '>' '^'
 
@@ -358,6 +358,11 @@ noenforce_white
 	: { }
 	| K_WHITE { }
 	| delimiter_nowhite { }
+	;
+
+skip_white
+	: {}
+	| K_WHITE {}
 	;
 
 packet
@@ -411,7 +416,34 @@ elem
 	| csum { }
 	| const { }
 	| inline_comment { }
+	| proto {}
 	;
+
+proto
+	: name param_list { printf("proto(%s)\n", $1); }
+	| name {  printf("proto(%s)\n", $1); }
+	;
+
+param_list
+	: '(' param_list_name_value ')' { }
+	;
+
+param_list_name_value
+	: name_value { }
+	| param_list_name_value ',' name_value { }
+	;
+
+name_value
+	: skip_white param skip_white '=' skip_white value skip_white { }
+	;
+
+param
+	: name { printf("param=%s\n", $1); }
+	;
+
+value	: string { printf("value=%s\n", $1); }
+	| param_list { }
+      	;
 
 expression
 	: number

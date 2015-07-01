@@ -115,6 +115,7 @@ number_ascii	([a-zA-Z])
 "]"		{ return ']'; }
 ","		{ return ','; }
 ":"		{ return ':'; }
+"="		{ return '='; }
 
 "\n"		{ yylineno++; }
 
@@ -149,6 +150,9 @@ number_ascii	([a-zA-Z])
 
 "'"."'"		{ yylval.number = (uint8_t) (*(yytext + 1));
 		  return number; }
+
+[a-z][a-z0-9]*	{ yylval.str = xstrdup(yytext);
+		  return name; }
 
 ";"[^\n]*	{/* NOP */}
 .		{ printf("Unknown character '%s'", yytext);
