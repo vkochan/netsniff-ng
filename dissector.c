@@ -24,16 +24,12 @@ int dissector_set_print_type(void *ptr, int type)
 	struct protocol *proto;
 
 	for (proto = ptr; proto; proto = proto->next) {
-		switch (type) {
-		case PRINT_NORM:
+		if (type & PRINT_NORM) {
 			proto->process = proto->print_full;
-			break;
-		case PRINT_LESS:
+		} else if (type == PRINT_LESS) {
 			proto->process = proto->print_less;
-			break;
-		default:
+		} else {
 			proto->process = NULL;
-			break;
 		}
 	}
 
@@ -64,8 +60,9 @@ static void dissector_main(struct pkt_buff *pkt, struct protocol *start,
 void dissector_entry_point(uint8_t *packet, size_t len, int linktype, int mode,
 			   struct sockaddr_ll *sll)
 {
+	struct pkt_buff pkt_tmp, pkt_hex, pkt_ascii;
 	struct protocol *proto_start, *proto_end;
-	struct pkt_buff *pkt;
+	struct pkt_buff *pkt, *pkt_orig;
 
 	if (mode == PRINT_NONE)
 		return;
@@ -103,18 +100,20 @@ void dissector_entry_point(uint8_t *packet, size_t len, int linktype, int mode,
 		break;
 	};
 
+	if (mode & PRINT_HEADERS) {
+		pkt_orig = pkt_clone(&pkt_tmp, pkt);
+	} else {
+		pkt_orig = pkt;
+	}
+
 	dissector_main(pkt, proto_start, proto_end);
 
-	switch (mode) {
-	case PRINT_HEX:
-		hex(pkt);
-		break;
-	case PRINT_ASCII:
-		ascii(pkt);
-		break;
-	case PRINT_HEX_ASCII:
-		hex_ascii(pkt);
-		break;
+	if (mode & PRINT_HEX) {
+		hex(pkt_clone(&pkt_hex, pkt_orig));
+	}
+
+	if (mode & PRINT_ASCII) {
+		ascii(pkt_clone(&pkt_ascii, pkt_orig));
 	}
 
 	tprintf_flush();

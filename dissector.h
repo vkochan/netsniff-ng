@@ -19,12 +19,12 @@
 #include "linktype.h"
 #include "proto_vlan.h"
 
-#define PRINT_NORM		0
-#define PRINT_LESS		1
-#define PRINT_HEX		2
-#define PRINT_ASCII		3
-#define PRINT_HEX_ASCII		4
-#define PRINT_NONE		5
+#define PRINT_NONE		    0
+#define PRINT_NORM		BIT(0)
+#define PRINT_LESS		BIT(1)
+#define PRINT_HEX		BIT(2)
+#define PRINT_ASCII		BIT(3)
+#define PRINT_HEADERS		BIT(4)
 
 extern char *if_indextoname(unsigned ifindex, char *ifname);
 

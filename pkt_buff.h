@@ -111,4 +111,11 @@ static inline void pkt_set_dissector(struct pkt_buff *pkt, struct hash_table *ta
 		pkt->dissector = pkt->dissector->next;
 }
 
+static inline struct pkt_buff* pkt_clone(struct pkt_buff *to,
+					 struct pkt_buff *from)
+{
+	memcpy(to, from, sizeof(struct pkt_buff));
+	return to;
+}
+
 #endif /* PKT_BUFF_H */

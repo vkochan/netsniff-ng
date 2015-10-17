@@ -405,4 +405,8 @@ static inline u64 cpu_to_le64(u64 val)
 # define DEFFILEMODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH) /* 0666 */
 #endif
 
+#ifndef BIT
+# define BIT(x) (1UL << (x))
+#endif
+
 #endif /* BUILT_IN_H */

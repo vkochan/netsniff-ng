@@ -73,7 +73,7 @@ static volatile sig_atomic_t sigint = 0, sighup = 0;
 static volatile bool next_dump = false;
 
 static const char *short_options =
-	"d:i:o:rf:MNJt:S:k:n:b:HQmcsqXlvhF:RGAP:Vu:g:T:DBUC:K:L:w";
+	"d:i:o:rf:MNJt:S:k:n:b:HQmcsqXlvhF:RGAP:Vu:g:T:DBUC:K:L:wz";
 static const struct option long_options[] = {
 	{"dev",			required_argument,	NULL, 'd'},
 	{"in",			required_argument,	NULL, 'i'},
@@ -111,6 +111,7 @@ static const struct option long_options[] = {
 	{"no-sock-mem",		no_argument,		NULL, 'A'},
 	{"update",		no_argument,		NULL, 'U'},
 	{"cooked",		no_argument,		NULL, 'w'},
+	{"headers",             no_argument,            NULL, 'z'},
 	{"verbose",		no_argument,		NULL, 'V'},
 	{"version",		no_argument,		NULL, 'v'},
 	{"help",		no_argument,		NULL, 'h'},
@@ -1225,6 +1226,7 @@ static void __noreturn help(void)
 	     "  -q|--less                      Print less-verbose packet information\n"
 	     "  -X|--hex                       Print packet data in hex format\n"
 	     "  -l|--ascii                     Print human-readable packet data\n"
+	     "  -z|--headers                   Print dissected headers if --hex or --ascii specified\n"
 	     "  -U|--update                    Update GeoIP databases\n"
 	     "  -V|--verbose                   Be more verbose\n"
 	     "  -v|--version                   Show version and exit\n"
@@ -1407,14 +1409,13 @@ int main(int argc, char **argv)
 			ctx.print_mode = PRINT_LESS;
 			break;
 		case 'X':
-			ctx.print_mode =
-				(ctx.print_mode == PRINT_ASCII) ?
-				 PRINT_HEX_ASCII : PRINT_HEX;
+			ctx.print_mode |= PRINT_HEX;
 			break;
 		case 'l':
-			ctx.print_mode =
-				(ctx.print_mode == PRINT_HEX) ?
-				 PRINT_HEX_ASCII : PRINT_ASCII;
+			ctx.print_mode |= PRINT_ASCII;
+			break;
+		case 'z':
+			ctx.print_mode |= PRINT_HEADERS;
 			break;
 		case 'k':
 			ctx.kpull = strtoul(optarg, NULL, 0);
@@ -1507,6 +1508,13 @@ int main(int argc, char **argv)
 		default:
 			break;
 		}
+	}
+
+	if (ctx.print_mode & PRINT_HEX && !(ctx.print_mode & PRINT_HEADERS)) {
+		ctx.print_mode &= ~PRINT_NORM;
+	}
+	if (ctx.print_mode & PRINT_ASCII && !(ctx.print_mode & PRINT_HEADERS)) {
+		ctx.print_mode &= ~PRINT_NORM;
 	}
 
 	if (!ctx.filter && optind != argc) {
