@@ -136,6 +136,15 @@ static void nlmsg_print_raw(struct nlmsghdr *hdr)
 	}
 }
 
+static void print_raw(uint8_t *data, size_t len)
+{
+	if (!len)
+		return;
+
+	_ascii(data, len);
+	_hex(data, len);
+}
+
 static const char *nlmsg_family2str(uint16_t family)
 {
 	switch (family) {
@@ -815,9 +824,12 @@ static void rtnl_msg_print(struct nlmsghdr *hdr)
 	}
 }
 
-static const char *genl_cmd2str(uint8_t table)
+static const char *genl_cmd2str(uint16_t type, uint8_t cmd)
 {
-	switch (table) {
+	if (type != GENL_ID_CTRL)
+		return "Unknown";
+
+	switch (cmd) {
 	case CTRL_CMD_UNSPEC: return "unspec";
 	case CTRL_CMD_NEWFAMILY: return "new family";
 	case CTRL_CMD_DELFAMILY: return "del family";
@@ -943,22 +955,23 @@ static void genl_print_ctrl_attrs(struct nlmsghdr *hdr)
 
 static void genl_msg_print(struct nlmsghdr *hdr)
 {
-	struct genlmsghdr *genl;
-
-	if (hdr->nlmsg_type != GENL_ID_CTRL) {
-		nlmsg_print_raw(hdr);
-		return;
-	}
-
-	genl = NLMSG_DATA(hdr);
+	struct genlmsghdr *genl = NLMSG_DATA(hdr);
+	uint32_t payload_len = NLMSG_PAYLOAD(hdr, sizeof(*genl));
 
 	tprintf(" [ Cmd %u (%s%s%s)", genl->cmd,
-		colorize_start(bold), genl_cmd2str(genl->cmd), colorize_end());
+		 colorize_start(bold),
+		 genl_cmd2str(hdr->nlmsg_type, genl->cmd),
+		 colorize_end());
 	tprintf(", Version %u", genl->version);
 	tprintf(", Reserved %u", genl->reserved);
 	tprintf(" ]\n");
 
-	genl_print_ctrl_attrs(hdr);
+	if (hdr->nlmsg_type == GENL_ID_CTRL) {
+		genl_print_ctrl_attrs(hdr);
+		return;
+	}
+
+	print_raw((uint8_t *)genl + NLMSG_ALIGN(sizeof(*genl)), payload_len);
 }
 
 static bool nlmsg_skip(struct nlmsghdr *hdr)
