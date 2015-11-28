@@ -61,6 +61,7 @@
 #define NLA_UINT8(attr) (*(uint8_t *)NLA_DATA(attr))
 #define NLA_UINT16(attr) (*(uint16_t *)NLA_DATA(attr))
 #define NLA_UINT32(attr) (*(uint32_t *)NLA_DATA(attr))
+#define NLA_UINT64(attr) (*(uint64_t *)NLA_DATA(attr))
 #define NLA_STR(attr) ((char *)NLA_DATA(attr))
 
 #ifndef GEN_NLA
@@ -1090,6 +1091,111 @@ static void genl_print_ctrl_attrs(struct nlmsghdr *hdr)
 	}
 }
 
+static const char *nl80211_if_type2str(uint32_t type)
+{
+	switch (type) {
+	case NL80211_IFTYPE_UNSPECIFIED: return "unspec";
+	case NL80211_IFTYPE_ADHOC: return "ad-hoc";
+	case NL80211_IFTYPE_STATION: return "station";
+	case NL80211_IFTYPE_AP: return "ap";
+	case NL80211_IFTYPE_AP_VLAN: return "ap vlan";
+	case NL80211_IFTYPE_WDS: return "wds";
+	case NL80211_IFTYPE_MONITOR: return "monitor";
+	case NL80211_IFTYPE_MESH_POINT: return "mesh point";
+	case NL80211_IFTYPE_P2P_CLIENT: return "p2p client";
+	case NL80211_IFTYPE_P2P_GO: return "p2p go";
+	case NL80211_IFTYPE_P2P_DEVICE: return "p2p device";
+	case NL80211_IFTYPE_OCB: return "ocb";
+	default: return "unknown";
+	}
+}
+
+static const char *nl80211_chan_type2str(uint32_t type)
+{
+	switch (type) {
+	case NL80211_CHAN_NO_HT: return "no ht";
+	case NL80211_CHAN_HT20: return "20 ht";
+	case NL80211_CHAN_HT40MINUS: return "-40 ht";
+	case NL80211_CHAN_HT40PLUS: return "+40 ht";
+	default: return "unknown";
+	}
+}
+
+static void genl_print_nl80211_attrs(struct nlmsghdr *hdr)
+{
+	struct genlmsghdr *genl = NLMSG_DATA(hdr);
+	struct nlattr *attr = GEN_NLA(genl);
+	uint32_t attrs_len = NLMSG_PAYLOAD(hdr, sizeof(struct genlmsghdr));
+	char str[40];
+	size_t len;
+
+	for (; NLA_OK(attr, attrs_len); attr = NLA_NEXT(attr, attrs_len)) {
+		switch (attr->nla_type) {
+		case NL80211_ATTR_UNSPEC:
+			nla_fmt(attr, "Unspecified");
+			break;
+		case NL80211_ATTR_WIPHY:
+			nla_fmt(attr, "Phy id %u", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_WIPHY_NAME:
+			nla_fmt(attr, "Phy name %s", NLA_STR(attr));
+			break;
+		case NL80211_ATTR_IFINDEX:
+			nla_fmt(attr, "Index %u", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_IFNAME:
+			nla_fmt(attr, "Name %s", NLA_STR(attr));
+			break;
+		case NL80211_ATTR_IFTYPE:
+		       	nla_fmt(attr, "Type %u (%s%s%s)", NLA_UINT32(attr),
+				colorize_start(bold),
+				nl80211_if_type2str(NLA_UINT32(attr)),
+				colorize_end());
+			break;
+		case NL80211_ATTR_MAC:
+			nla_fmt(attr, "MAC %s",
+				device_addr2str(NLA_DATA(attr),
+				NLA_LEN(attr), 0, str, sizeof(str)));
+			break;
+		case NL80211_ATTR_WDEV:
+			nla_fmt(attr, "Wireless device id %lu", NLA_UINT64(attr));
+			break;
+		case NL80211_ATTR_WIPHY_FREQ:
+			nla_fmt(attr, "Phy freq %u", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_WIPHY_CHANNEL_TYPE:
+			nla_fmt(attr, "Channel type %u (%s%s%s)", NLA_UINT32(attr),
+				colorize_start(bold),
+				nl80211_chan_type2str(NLA_UINT32(attr)),
+				colorize_end());
+			break;
+		case NL80211_ATTR_CHANNEL_WIDTH:
+			nla_fmt(attr, "Channel width %u", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_CENTER_FREQ1:
+			nla_fmt(attr, "Center freq1 %u", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_CENTER_FREQ2:
+			nla_fmt(attr, "Center freq2 %u", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_WIPHY_TX_POWER_LEVEL:
+			nla_fmt(attr, "Tx power level %u mBm", NLA_UINT32(attr));
+			break;
+		case NL80211_ATTR_SSID:
+			len = min(sizeof(str), NLA_LEN(attr));
+
+			memcpy(str, NLA_DATA(attr), len);
+			str[len - 1] = '\0';
+
+			nla_fmt(attr, "SSID %s", str);
+			break;
+		default:
+			nla_fmt(attr, "0x%x", attr->nla_type);
+			break;
+		}
+	}
+}
+
 static enum genl_family_t genl_family_type_get(uint16_t type)
 {
 	struct genl_family *fam;
@@ -1126,12 +1232,12 @@ static void genl_msg_print(struct nlmsghdr *hdr)
 	tprintf(", Reserved %u", genl->reserved);
 	tprintf(" ]\n");
 
-	if (type == GENL_FAMILY_CTRL) {
+	if (type == GENL_FAMILY_CTRL)
 		genl_print_ctrl_attrs(hdr);
-		return;
-	}
-
-	print_raw((uint8_t *)genl + NLMSG_ALIGN(sizeof(*genl)), payload_len);
+	else if (type == GENL_FAMILY_NL80211)
+		genl_print_nl80211_attrs(hdr);
+	else
+		print_raw((uint8_t *)genl + NLMSG_ALIGN(sizeof(*genl)), payload_len);
 }
 
 static bool nlmsg_skip(struct nlmsghdr *hdr)
