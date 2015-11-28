@@ -23,6 +23,7 @@
 #include "proto.h"
 #include "protos.h"
 #include "timer.h"
+#include "nl80211.h"
 
 #define INFINITY 0xFFFFFFFFU
 
@@ -99,6 +100,12 @@
 
 static struct nl_cache *genl_af_cache;
 static struct nl_sock *genl_sock;
+
+enum genl_family_t {
+	GENL_FAMILY_UNSPEC,
+	GENL_FAMILY_CTRL,
+	GENL_FAMILY_NL80211,
+};
 
 struct flag_name {
 	const char *name;
@@ -824,11 +831,8 @@ static void rtnl_msg_print(struct nlmsghdr *hdr)
 	}
 }
 
-static const char *genl_cmd2str(uint16_t type, uint8_t cmd)
+static const char *genl_ctrl_cmd2str(uint8_t cmd)
 {
-	if (type != GENL_ID_CTRL)
-		return "Unknown";
-
 	switch (cmd) {
 	case CTRL_CMD_UNSPEC: return "unspec";
 	case CTRL_CMD_NEWFAMILY: return "new family";
@@ -843,6 +847,139 @@ static const char *genl_cmd2str(uint16_t type, uint8_t cmd)
 
 	default: return "Unknown";
 	}
+}
+
+static const char *nl80211_cmd2str(uint8_t cmd)
+{
+	switch (cmd) {
+	case NL80211_CMD_UNSPEC: return "unspec";
+	case NL80211_CMD_GET_WIPHY: return "get wiphy";
+	case NL80211_CMD_SET_WIPHY: return "set wiphy";
+	case NL80211_CMD_NEW_WIPHY: return "new wiphy";
+	case NL80211_CMD_DEL_WIPHY: return "del wiphy";
+	case NL80211_CMD_GET_INTERFACE: return "get interface";
+	case NL80211_CMD_SET_INTERFACE: return "set interface";
+	case NL80211_CMD_NEW_INTERFACE: return "new interface";
+	case NL80211_CMD_DEL_INTERFACE: return "del interface";
+	case NL80211_CMD_GET_KEY:  return "get key";
+	case NL80211_CMD_SET_KEY: return "set key";
+	case NL80211_CMD_NEW_KEY: return "new key";
+	case NL80211_CMD_DEL_KEY: return "del key";
+	case NL80211_CMD_GET_BEACON: return "get beacon";
+	case NL80211_CMD_SET_BEACON: return "set beacon";
+	case NL80211_CMD_START_AP: return "start ap";
+	case NL80211_CMD_STOP_AP: return "stop ap";
+	case NL80211_CMD_GET_STATION: return "get station";
+	case NL80211_CMD_SET_STATION: return "set station";
+	case NL80211_CMD_NEW_STATION: return "new station";
+	case NL80211_CMD_DEL_STATION: return "del station";
+	case NL80211_CMD_GET_MPATH: return "get mesh path";
+	case NL80211_CMD_SET_MPATH: return "set mesh path";
+	case NL80211_CMD_NEW_MPATH: return "new mesh path";
+	case NL80211_CMD_DEL_MPATH: return "del mesh path";
+	case NL80211_CMD_SET_BSS: return "set bss";
+	case NL80211_CMD_SET_REG: return "set regdom";
+	case NL80211_CMD_REQ_SET_REG: return "regdom request";
+	case NL80211_CMD_GET_MESH_CONFIG: return "get mesh config";
+	case NL80211_CMD_SET_MESH_CONFIG: return "set mesh config";
+	case NL80211_CMD_SET_MGMT_EXTRA_IE: return "set mgmt extra IE";
+	case NL80211_CMD_GET_REG: return "get regdom";
+	case NL80211_CMD_GET_SCAN: return "get scan";
+	case NL80211_CMD_TRIGGER_SCAN: return "trigger scan";
+	case NL80211_CMD_NEW_SCAN_RESULTS: return "new scan results";
+	case NL80211_CMD_SCAN_ABORTED: return "abort scan";
+	case NL80211_CMD_REG_CHANGE: return "regdom changed";
+	case NL80211_CMD_AUTHENTICATE: return "authenticate";
+	case NL80211_CMD_ASSOCIATE: return "associate";
+	case NL80211_CMD_DEAUTHENTICATE: return "deauthenticate";
+	case NL80211_CMD_DISASSOCIATE: return "disassociate";
+	case NL80211_CMD_MICHAEL_MIC_FAILURE: return "michael mic failure";
+	case NL80211_CMD_REG_BEACON_HINT: return "regulatory beacon hint";
+	case NL80211_CMD_JOIN_IBSS: return "join ibss";
+	case NL80211_CMD_LEAVE_IBSS: return "leave ibss";
+	case NL80211_CMD_TESTMODE: return "test mode";
+	case NL80211_CMD_CONNECT: return "connect";
+	case NL80211_CMD_ROAM: return "roam card request";
+	case NL80211_CMD_DISCONNECT: return "disconnect";
+	case NL80211_CMD_SET_WIPHY_NETNS: return "set wiphy netns";
+	case NL80211_CMD_GET_SURVEY: return "get survey";
+	case NL80211_CMD_NEW_SURVEY_RESULTS: return "new survey results";
+	case NL80211_CMD_SET_PMKSA: return "add pmksa entry";
+	case NL80211_CMD_DEL_PMKSA: return "del pmksa entry";
+	case NL80211_CMD_FLUSH_PMKSA: return "flush all pmksa entries";
+	case NL80211_CMD_REMAIN_ON_CHANNEL: return "remain awake on channel";
+	case NL80211_CMD_CANCEL_REMAIN_ON_CHANNEL: return "cancel remain on channel";
+	case NL80211_CMD_SET_TX_BITRATE_MASK: return "set tx bitrate mask";
+	case NL80211_CMD_REGISTER_FRAME: return "register mgmt frame";
+	case NL80211_CMD_FRAME: return "mgmt frame request/event";
+	case NL80211_CMD_FRAME_TX_STATUS: return "mgmt frame tx status";
+	case NL80211_CMD_SET_POWER_SAVE: return "set power save";
+	case NL80211_CMD_GET_POWER_SAVE: return "get power save";
+	case NL80211_CMD_SET_CQM: return "set cqm";
+	case NL80211_CMD_NOTIFY_CQM: return "notify cqm";
+	case NL80211_CMD_SET_CHANNEL: return "set channel";
+	case NL80211_CMD_SET_WDS_PEER: return "set wds peer";
+	case NL80211_CMD_FRAME_WAIT_CANCEL: return "frame wait cancel";
+	case NL80211_CMD_JOIN_MESH: return "join mesh";
+	case NL80211_CMD_LEAVE_MESH: return "leave mesh";
+	case NL80211_CMD_UNPROT_DEAUTHENTICATE: return "unprotected deauthenticate";
+	case NL80211_CMD_UNPROT_DISASSOCIATE: return "unprotected disassociate";
+	case NL80211_CMD_NEW_PEER_CANDIDATE: return "new peer candidate";
+	case NL80211_CMD_GET_WOWLAN: return "get wowlan";
+	case NL80211_CMD_SET_WOWLAN: return "set wowlan";
+	case NL80211_CMD_START_SCHED_SCAN: return "start sched scan";
+	case NL80211_CMD_STOP_SCHED_SCAN: return "stop sched scan";
+	case NL80211_CMD_SCHED_SCAN_RESULTS: return "sched scan results";
+	case NL80211_CMD_SCHED_SCAN_STOPPED: return "sched scan stopped";
+	case NL80211_CMD_SET_REKEY_OFFLOAD: return "set rekey offload";
+	case NL80211_CMD_PMKSA_CANDIDATE: return "pmksa candidate event";
+	case NL80211_CMD_TDLS_OPER: return "tdls command";
+	case NL80211_CMD_TDLS_MGMT: return "send tdls mgmt frame";
+	case NL80211_CMD_UNEXPECTED_FRAME: return "unexpected frame";
+	case NL80211_CMD_PROBE_CLIENT: return "probe client";
+	case NL80211_CMD_REGISTER_BEACONS: return "register beacons";
+	case NL80211_CMD_UNEXPECTED_4ADDR_FRAME: return "unexpecetd 4addr frame";
+	case NL80211_CMD_SET_NOACK_MAP: return "set noack map";
+	case NL80211_CMD_CH_SWITCH_NOTIFY: return "channel switch notify";
+	case NL80211_CMD_START_P2P_DEVICE: return "start p2p device";
+	case NL80211_CMD_STOP_P2P_DEVICE: return "stop p2p device";
+	case NL80211_CMD_CONN_FAILED: return "connection request failed";
+	case NL80211_CMD_SET_MCAST_RATE: return "set mcast rate";
+	case NL80211_CMD_SET_MAC_ACL: return "set mac acl";
+	case NL80211_CMD_RADAR_DETECT: return "radar detect";
+	case NL80211_CMD_GET_PROTOCOL_FEATURES: return "get proto features";
+	case NL80211_CMD_UPDATE_FT_IES: return "update fast-transition(FT) IE";
+	case NL80211_CMD_FT_EVENT: return "fast-transition(FT) event";
+	case NL80211_CMD_CRIT_PROTOCOL_START: return "critical proto start";
+	case NL80211_CMD_CRIT_PROTOCOL_STOP: return "critical proto stop";
+	case NL80211_CMD_GET_COALESCE: return "get coalesce";
+	case NL80211_CMD_SET_COALESCE: return "set coalesce";
+	case NL80211_CMD_CHANNEL_SWITCH: return "channel switch";
+	case NL80211_CMD_VENDOR: return "vendor command/event";
+	case NL80211_CMD_SET_QOS_MAP: return "set qos map";
+	case NL80211_CMD_ADD_TX_TS: return "add tx traffic stream";
+	case NL80211_CMD_DEL_TX_TS: return "del tx traffic stream";
+	case NL80211_CMD_GET_MPP: return "get mesh proxy path";
+	case NL80211_CMD_JOIN_OCB: return "join ocb";
+	case NL80211_CMD_LEAVE_OCB: return "leave ocb";
+	case NL80211_CMD_CH_SWITCH_STARTED_NOTIFY: return "channel switch started";
+	case NL80211_CMD_TDLS_CHANNEL_SWITCH: return "tdls start channel switch";
+	case NL80211_CMD_TDLS_CANCEL_CHANNEL_SWITCH: return "tdls cancel channel switch";
+	case NL80211_CMD_WIPHY_REG_CHANGE: return "wiphy regdom change";
+	}
+
+	return "Unknown";
+}
+
+static const char *genl_cmd2str(enum genl_family_t type, uint8_t cmd)
+{
+	if (type == GENL_FAMILY_CTRL)
+		return genl_ctrl_cmd2str(cmd);
+
+	if (type == GENL_FAMILY_NL80211)
+		return nl80211_cmd2str(cmd);
+
+	return "Unknown";
 }
 
 static struct flag_name genl_ops_flags[] = {
@@ -953,20 +1090,43 @@ static void genl_print_ctrl_attrs(struct nlmsghdr *hdr)
 	}
 }
 
+static enum genl_family_t genl_family_type_get(uint16_t type)
+{
+	struct genl_family *fam;
+	char *name;
+
+	if (type == GENL_ID_CTRL)
+		return GENL_FAMILY_CTRL;
+
+	fam = genl_ctrl_search(genl_af_cache, type);
+	if (!fam)
+		return GENL_FAMILY_UNSPEC;
+
+	name = genl_family_get_name(fam);
+	if (!name)
+		return GENL_FAMILY_UNSPEC;
+
+	if (strcmp("nl80211", name) == 0)
+		return GENL_FAMILY_NL80211;
+
+	return GENL_FAMILY_UNSPEC;
+}
+
 static void genl_msg_print(struct nlmsghdr *hdr)
 {
 	struct genlmsghdr *genl = NLMSG_DATA(hdr);
 	uint32_t payload_len = NLMSG_PAYLOAD(hdr, sizeof(*genl));
+	enum genl_family_t type = genl_family_type_get(hdr->nlmsg_type);
 
 	tprintf(" [ Cmd %u (%s%s%s)", genl->cmd,
 		 colorize_start(bold),
-		 genl_cmd2str(hdr->nlmsg_type, genl->cmd),
+		 genl_cmd2str(type, genl->cmd),
 		 colorize_end());
 	tprintf(", Version %u", genl->version);
 	tprintf(", Reserved %u", genl->reserved);
 	tprintf(" ]\n");
 
-	if (hdr->nlmsg_type == GENL_ID_CTRL) {
+	if (type == GENL_FAMILY_CTRL) {
 		genl_print_ctrl_attrs(hdr);
 		return;
 	}
