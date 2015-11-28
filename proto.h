@@ -10,6 +10,7 @@
 
 #include <ctype.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "tprintf.h"
 
@@ -20,6 +21,8 @@ struct protocol {
 	const unsigned int key;
 	void (*print_full)(struct pkt_buff *pkt);
 	void (*print_less)(struct pkt_buff *pkt);
+	void (*init)(void);
+	void (*uninit)(void);
 	/* Used by program logic */
 	struct protocol *next;
 	void (*process)   (struct pkt_buff *pkt);
@@ -31,5 +34,17 @@ extern void hex(struct pkt_buff *pkt);
 extern void _ascii(uint8_t *ptr, size_t len);
 extern void ascii(struct pkt_buff *pkt);
 extern void hex_ascii(struct pkt_buff *pkt);
+
+static inline void proto_ops_init(struct protocol *prot)
+{
+	if (prot->init)
+		prot->init();
+}
+
+static inline void proto_ops_uninit(struct protocol *prot)
+{
+	if (prot->uninit)
+		prot->uninit();
+}
 
 #endif /* PROTO_H */

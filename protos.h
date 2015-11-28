@@ -1,7 +1,7 @@
 #ifndef PROTOS_H
 #define PROTOS_H
 
-struct protocol;
+#include "proto.h"
 
 extern struct protocol arp_ops;
 extern struct protocol ethernet_ops;

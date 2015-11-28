@@ -12,6 +12,8 @@
 #include <netlink/msg.h>
 #include <netlink/route/link.h>
 #include <netlink/route/addr.h>
+#include <netlink/genl/ctrl.h>
+#include <netlink/genl/family.h>
 #include <linux/if_arp.h>
 #include <arpa/inet.h>
 
@@ -94,6 +96,9 @@
 	tprintf(", Len %d ", NLA_LEN(attr));
 
 #define nla_fmt_nested_end() tprintf("\n")
+
+static struct nl_cache *genl_af_cache;
+static struct nl_sock *genl_sock;
 
 struct flag_name {
 	const char *name;
@@ -239,11 +244,21 @@ static const char *nlmsg_rtnl_type2str(uint16_t type)
 
 static const char *nlmsg_genl_type2str(uint16_t type)
 {
-	switch (type) {
-	case GENL_ID_GENERATE:	return "id gen";
-	case GENL_ID_CTRL:	return "id ctrl";
-	default:		return NULL;
-	}
+	struct genl_family *fam;
+
+	if (type == GENL_ID_GENERATE)
+		return "id gen";
+	if (type == GENL_ID_CTRL)
+		return "id ctrl";
+
+	if (!genl_af_cache)
+		return NULL;
+
+	fam = genl_ctrl_search(genl_af_cache, type);
+	if (!fam)
+		return NULL;
+
+	return genl_family_get_name(fam);
 }
 
 static char *nlmsg_type2str(uint16_t proto, uint16_t type, char *buf, int len)
@@ -946,12 +961,25 @@ static void genl_msg_print(struct nlmsghdr *hdr)
 	genl_print_ctrl_attrs(hdr);
 }
 
+static bool nlmsg_skip(struct nlmsghdr *hdr)
+{
+	if (genl_sock) {
+		if (nl_socket_get_local_port(genl_sock) == hdr->nlmsg_pid)
+			return true;
+	}
+
+	return false;
+}
+
 static void nlmsg_print(uint16_t family, struct nlmsghdr *hdr)
 {
 	u16 nlmsg_flags = hdr->nlmsg_flags;
 	char type[32];
 	char flags[128];
 	char procname[PATH_MAX];
+
+	if (nlmsg_skip(hdr))
+		return;
 
 	/* Look up the process name if message is not coming from the kernel.
 	 *
@@ -1046,7 +1074,51 @@ static void nlmsg_less(struct pkt_buff *pkt)
 		colorize_end());
 }
 
+static void genl_init(void)
+{
+	int err;
+
+	genl_sock = nl_socket_alloc();
+	if (!genl_sock) {
+		fprintf(stderr, "Could not allocate genl socket\n");
+		return;
+	}
+
+	err = nl_connect(genl_sock, NETLINK_GENERIC);
+	if (err < 0) {
+		fprintf(stderr, "Could not connect genl socket\n");
+		return;
+	}
+
+	err = genl_ctrl_alloc_cache(genl_sock, &genl_af_cache);
+	if (err < 0) {
+		fprintf(stderr, "Could not allocate genl family cache\n");
+		return;
+	}
+}
+
+static void genl_uninit(void)
+{
+	nl_cache_clear(genl_af_cache);
+	nl_cache_free(genl_af_cache);
+
+	nl_close(genl_sock);
+	nl_socket_free(genl_sock);
+}
+
+static void nlmsg_init(void)
+{
+	genl_init();
+}
+
+static void nlmsg_uninit(void)
+{
+	genl_uninit();
+}
+
 struct protocol nlmsg_ops = {
+	.init 	    = nlmsg_init,
+	.uninit	    = nlmsg_uninit,
 	.print_full = nlmsg,
 	.print_less = nlmsg_less,
 };

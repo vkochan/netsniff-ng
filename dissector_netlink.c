@@ -19,10 +19,13 @@ static inline void dissector_init_exit(int type)
 
 void dissector_init_netlink(int fnttype)
 {
+	proto_ops_init(&nlmsg_ops);
+
 	dissector_init_entry(fnttype);
 	dissector_init_exit(fnttype);
 }
 
 void dissector_cleanup_netlink(void)
 {
+	proto_ops_uninit(&nlmsg_ops);
 }
