@@ -120,6 +120,11 @@ ip4_addr	([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)
 "1ad"		{ return K_1AD; }
 "1q"		{ return K_1Q; }
 
+	/* MPLS (Multi Protocol Label Switching) */
+"lbl"|"label"	{ return K_LABEL; }
+"last"		{ return K_LAST; }
+"tc"|"tclass"	{ return K_TC; }
+
 	/* ARP */
 "sha"|"smac"	{ return K_SHA; }
 "spa"|"sip"	{ return K_SPA; }
@@ -167,6 +172,7 @@ ip4_addr	([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)
 
 "eth"		{ return K_ETH; }
 "vlan"		{ return K_VLAN; }
+"mpls"		{ return K_MPLS; }
 "arp"		{ return K_ARP; }
 "ip4"|"ipv4"	{ return K_IP4; }
 "udp"		{ return K_UDP; }
