@@ -16,6 +16,7 @@ void ui_table_init(struct ui_table *tbl)
 
 	tbl->rows_y  = tbl->y;
 	tbl->width   = COLS;
+	tbl->height  = LINES - 2;
 	tbl->col_pad = 1;
 
 	INIT_LIST_HEAD(&tbl->cols);
@@ -93,9 +94,21 @@ void ui_table_row_add(struct ui_table *tbl)
 	tbl->rows_y++;
 }
 
+static int ui_table_width_get(struct ui_table *tbl)
+{
+	return tbl->width == UI_MAX_WIDTH ? COLS : tbl->width;
+}
+
 void ui_table_clear(struct ui_table *tbl)
 {
+	int max_width = ui_table_width_get(tbl);
+	int y;
+
 	tbl->rows_y = tbl->y;
+
+	for (y = tbl->y + 1; y < tbl->y + tbl->height; y++) {
+		mvprintw(y, tbl->x, "%*s", max_width, " ");
+	}
 }
 
 #define UI_ALIGN_COL(col) (((col)->align == UI_ALIGN_LEFT) ? "%-*.*s" : "%*.*s")
@@ -119,6 +132,11 @@ void ui_table_row_print(struct ui_table *tbl, uint32_t col_id, const char *str)
 void ui_table_header_color_set(struct ui_table *tbl, int color)
 {
 	tbl->hdr_color = color;
+}
+
+void ui_table_height_set(struct ui_table *tbl, int height)
+{
+	tbl->height = height;
 }
 
 void ui_table_header_print(struct ui_table *tbl)
