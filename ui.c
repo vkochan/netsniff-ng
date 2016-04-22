@@ -8,6 +8,8 @@
 #include "ui.h"
 #include "xmalloc.h"
 
+#define ui_print_yx(y, x, fmt, ...) mvprintw(y, x, fmt, ##__VA_ARGS__)
+
 void ui_table_init(struct ui_table *tbl)
 {
 	memset(tbl, 0, sizeof(*tbl));
@@ -100,7 +102,7 @@ void ui_table_clear(struct ui_table *tbl)
 	tbl->rows_y = tbl->y;
 
 	for (y = tbl->y + 1; y < tbl->y + tbl->height; y++) {
-		mvprintw(y, tbl->x, "%*s", tbl->width, " ");
+		ui_print_yx(y, tbl->x, "%*s", tbl->width, " ");
 	}
 }
 
@@ -109,8 +111,8 @@ void ui_table_clear(struct ui_table *tbl)
 static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
 				 const char *str)
 {
-	mvprintw(tbl->rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, str);
-	mvprintw(tbl->rows_y, col->pos + col->len, "%*s", tbl->col_pad, " ");
+	ui_print_yx(tbl->rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, str);
+	ui_print_yx(tbl->rows_y, col->pos + col->len, "%*s", tbl->col_pad, " ");
 }
 
 void ui_table_row_print(struct ui_table *tbl, uint32_t col_id, const char *str)
@@ -140,14 +142,14 @@ void ui_table_header_print(struct ui_table *tbl)
 
 	attron(tbl->hdr_color);
 
-	mvprintw(tbl->y, tbl->x, "%-*.*s", max_width - tbl->x, max_width - tbl->x, "");
-	mvprintw(tbl->y, tbl->x, "");
+	ui_print_yx(tbl->y, tbl->x, "%-*.*s", max_width - tbl->x, max_width - tbl->x, "");
+	ui_print_yx(tbl->y, tbl->x, "");
 
 	list_for_each_entry(col, &tbl->cols, entry) {
 		__ui_table_row_print(tbl, col, col->name);
 		width += col->len + tbl->col_pad;
 	}
 
-	mvprintw(tbl->y, width, "%*s", max_width - width, " ");
+	ui_print_yx(tbl->y, width, "%*s", max_width - width, " ");
 	attroff(tbl->hdr_color);
 }
