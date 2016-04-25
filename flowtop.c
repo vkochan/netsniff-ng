@@ -1020,6 +1020,8 @@ static void draw_flow_entry(const struct flow_entry *n)
 	if (show_src) {
 		ui_table_row_add(&flows_tbl);
 
+		ui_table_row_print(&flows_tbl, TBL_FLOW_TIME, "-->");
+
 		print_flow_peer_info(n, FLOW_DIR_DST);
 	}
 }
