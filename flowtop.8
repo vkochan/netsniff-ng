@@ -134,7 +134,13 @@ limit policy), different hosts or IP addresses can be placed into geoip.conf,
 separated by a newline.
 .PP
 .SS -t <time>, --interval <time>
-Flow info refresh interval in seconds, default is 1s.
+Flow info refresh interval in seconds, default is 1s in interactive mode. If
+-c,--csv option is specified the default is 0s, it may be used with combination
+of csv mode for delay output before calculate such dynamic statistics like
+rate/bytes.
+.PP
+.SS -c, --csv
+Only dump flows to stdout in CSV mode (might be used with -t, --interval option).
 .PP
 .SS -v, --version
 Show version information and exit.
@@ -149,6 +155,9 @@ Default ncurses output for flowtop that tracks IPv4, IPv6 flows for TCP.
 .PP
 .SS flowtop -46UTDISs
 This example enables the maximum display options for flowtop.
+.PP
+.SS flowtop -d -t 1
+This example only dumps flows to stdout with delay 1s to calculate rate info.
 .PP
 .SH CONFIG FILES
 .PP
