@@ -35,6 +35,7 @@ struct ui_table {
 	int col_pad;
 	int width;
 	int height;
+	const char *default_col;
 
 	void (*data_bind)(struct ui_table *tbl, int col_id, const void *data);
 	void (*col_print)(struct ui_table *tbl, int col_id, const char *str);
@@ -52,6 +53,7 @@ extern void ui_table_col_add(struct ui_table *tbl, uint32_t id, char *name,
 			     uint32_t len);
 extern void ui_table_col_color_set(struct ui_table *tbl, int col_id, int color);
 extern void ui_table_col_align_set(struct ui_table *tbl, int col_id, enum ui_align align);
+extern void ui_table_default_col_set(struct ui_table *tbl, const char *col);
 extern void ui_table_col_print_set(struct ui_table *tbl,
 				   void (*func)(struct ui_table *tbl,
 						int col_id, const char *str));

@@ -42,10 +42,11 @@ void ui_table_init(struct ui_table *tbl)
 	if (ui == UI_CURSES)
 		getsyx(tbl->y, tbl->x);
 
-	tbl->rows_y  = tbl->y;
-	tbl->width   = COLS;
-	tbl->height  = LINES - 2;
-	tbl->col_pad = 1;
+	tbl->rows_y      = tbl->y;
+	tbl->width       = COLS;
+	tbl->height      = LINES - 2;
+	tbl->col_pad     = 1;
+	tbl->default_col = "*";
 
 	INIT_LIST_HEAD(&tbl->cols);
 }
@@ -116,6 +117,11 @@ void ui_table_col_align_set(struct ui_table *tbl, int col_id, enum ui_align alig
 	col->align = align;
 }
 
+void ui_table_default_col_set(struct ui_table *tbl, const char *col)
+{
+	tbl->default_col = col;
+}
+
 void ui_table_data_bind_set(struct ui_table *tbl,
 			    void (*func)(struct ui_table *tbl,
 					 int col_id, const void *data))
@@ -164,12 +170,19 @@ void ui_table_clear(struct ui_table *tbl)
 static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
 				 const char *str)
 {
+	const char *tmp;
+
+	if (!str || !strlen(str))
+		tmp = tbl->default_col;
+	else
+		tmp = str;
+
 	if (tbl->col_print) {
 		tbl->col_print(tbl, col->id, str);
 		return;
 	}
 
-	ui_print_yx(tbl->rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, str);
+	ui_print_yx(tbl->rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, tmp);
 	ui_print_yx(tbl->rows_y, col->pos + col->len, "%*s", tbl->col_pad, " ");
 }
 
