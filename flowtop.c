@@ -133,12 +133,13 @@ static struct sysctl_params_ctx sysctl = { -1, -1 };
 
 static unsigned int cols, rows;
 
-static unsigned int interval = 1;
+static unsigned int interval;
 static bool show_src = false;
 static bool resolve_dns = true;
 static bool resolve_geoip = true;
 static enum rate_units rate_type = RATE_BYTES;
 static bool show_active_only = false;
+static bool do_csv = false;
 
 enum tbl_flow_col {
 	TBL_FLOW_PROCESS,
@@ -146,16 +147,25 @@ enum tbl_flow_col {
 	TBL_FLOW_PROTO,
 	TBL_FLOW_STATE,
 	TBL_FLOW_TIME,
-	TBL_FLOW_ADDRESS,
-	TBL_FLOW_PORT,
-	TBL_FLOW_GEO,
-	TBL_FLOW_BYTES,
-	TBL_FLOW_RATE,
+	TBL_FLOW_SRC_ADDRESS,
+	TBL_FLOW_SRC_PORT,
+	TBL_FLOW_SRC_GEO,
+	TBL_FLOW_SRC_BYTES,
+	TBL_FLOW_SRC_RATE,
+	TBL_FLOW_SRC_PKTS,
+	TBL_FLOW_SRC_PPS,
+	TBL_FLOW_DST_ADDRESS,
+	TBL_FLOW_DST_PORT,
+	TBL_FLOW_DST_GEO,
+	TBL_FLOW_DST_BYTES,
+	TBL_FLOW_DST_RATE,
+	TBL_FLOW_DST_PKTS,
+	TBL_FLOW_DST_PPS,
 };
 
 static struct ui_table flows_tbl;
 
-static const char *short_options = "vhTUsDIS46ut:nGb";
+static const char *short_options = "vhTUsDIS46ut:nGbc";
 static const struct option long_options[] = {
 	{"ipv4",	no_argument,		NULL, '4'},
 	{"ipv6",	no_argument,		NULL, '6'},
@@ -169,6 +179,7 @@ static const struct option long_options[] = {
 	{"show-src",	no_argument,		NULL, 's'},
 	{"bits",        no_argument,		NULL, 'b'},
 	{"update",	no_argument,		NULL, 'u'},
+	{"csv",		no_argument,		NULL, 'c'},
 	{"interval",    required_argument,	NULL, 't'},
 	{"version",	no_argument,		NULL, 'v'},
 	{"help",	no_argument,		NULL, 'h'},
@@ -252,6 +263,10 @@ static const struct nfct_filter_ipv6 filter_ipv6 = {
 	.mask = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff },
 };
 
+static void collector_dump_flows(void);
+static struct nfct_handle *collector_create_updater(void);
+static void collector_refresh_flows(struct nfct_handle *handle);
+
 static int64_t time_after_us(struct timeval *tv)
 {
 	struct timeval now;
@@ -300,6 +315,7 @@ static void help(void)
 	     "  -s|--show-src          Also show source, not only dest\n"
 	     "  -b|--bits              Show rates in bits/s instead of bytes/s\n"
 	     "  -u|--update            Update GeoIP databases\n"
+	     "  -c|--csv               Dump flows to stdout in CSV format\n"
 	     "  -t|--interval <time>   Refresh time in seconds (default 1s)\n"
 	     "  -v|--version           Print version and exit\n"
 	     "  -h|--help              Print this help and exit\n\n"
@@ -456,12 +472,28 @@ static void flow_list_destroy_entry(struct flow_list *fl,
 	}
 }
 
+static void flow_list_write_lock(struct flow_list *fl)
+{
+	if (do_csv)
+		return;
+
+	synchronize_rcu();
+	spinlock_lock(&fl->lock);
+}
+
+static void flow_list_unlock(struct flow_list *fl)
+{
+	if (do_csv)
+		return;
+
+	spinlock_unlock(&fl->lock);
+}
+
 static void flow_list_destroy(struct flow_list *fl)
 {
 	struct flow_entry *n;
 
-	synchronize_rcu();
-	spinlock_lock(&flow_list.lock);
+	flow_list_write_lock(fl);
 
 	while (fl->head != NULL) {
 		n = rcu_dereference(fl->head->next);
@@ -471,7 +503,7 @@ static void flow_list_destroy(struct flow_list *fl)
 		rcu_assign_pointer(fl->head, n);
 	}
 
-	spinlock_unlock(&flow_list.lock);
+	flow_list_unlock(fl);
 }
 
 static int walk_process(unsigned int pid, struct flow_entry *n)
@@ -820,6 +852,11 @@ static char *bandw2str(double bytes, char *buf, size_t len)
 		return buf;
 	}
 
+	if (do_csv) {
+		snprintf(buf, len, "%llu", (unsigned long long)bytes);
+		return buf;
+	}
+
 	if (bytes > 1000000000.)
 		snprintf(buf, len, "%.1fGB", bytes / 1000000000.);
 	else if (bytes > 1000000.)
@@ -838,6 +875,11 @@ static char *rate2str(double rate, char *buf, size_t len)
 		{ "%.1fGbit/s", "%.1fMbit/s", "%.1fkbit/s", "%.0fbit/s" },
 		{ "%.1fGB/s",   "%.1fMB/s",   "%.1fkB/s",   "%.0fB/s"   }
 	};
+
+	if (do_csv) {
+		snprintf(buf, len, "%llu", (unsigned long long)rate);
+		return buf;
+	}
 
 	if (rate <= 0) {
 		buf[0] = '\0';
@@ -869,6 +911,11 @@ static char *time2str(uint64_t tstamp, char *str, size_t len)
 	s = now - (tstamp ? (tstamp / NSEC_PER_SEC) : now);
 	if (s <= 0) {
 		str[0] = '\0';
+		return str;
+	}
+
+	if (do_csv) {
+		slprintf(str, len, "%u", s);
 		return str;
 	}
 
@@ -962,17 +1009,17 @@ static void print_flow_peer_info(const struct flow_entry *n, enum flow_direction
 		addr_color     = dst_color;
 	}
 
-	ui_table_col_color_set(&flows_tbl, TBL_FLOW_ADDRESS, addr_color);
-	ui_table_col_color_set(&flows_tbl, TBL_FLOW_PORT, port_color);
-	ui_table_col_color_set(&flows_tbl, TBL_FLOW_GEO, country_color);
-	ui_table_col_color_set(&flows_tbl, TBL_FLOW_BYTES, counters_color);
-	ui_table_col_color_set(&flows_tbl, TBL_FLOW_RATE, counters_color);
+	ui_table_col_color_set(&flows_tbl, TBL_FLOW_DST_ADDRESS, addr_color);
+	ui_table_col_color_set(&flows_tbl, TBL_FLOW_DST_PORT, port_color);
+	ui_table_col_color_set(&flows_tbl, TBL_FLOW_DST_GEO, country_color);
+	ui_table_col_color_set(&flows_tbl, TBL_FLOW_DST_BYTES, counters_color);
+	ui_table_col_color_set(&flows_tbl, TBL_FLOW_DST_RATE, counters_color);
 
-	ui_table_data_bind(&flows_tbl, TBL_FLOW_ADDRESS, n);
-	ui_table_data_bind(&flows_tbl, TBL_FLOW_PORT, n);
-	ui_table_data_bind(&flows_tbl, TBL_FLOW_GEO, n);
-	ui_table_data_bind(&flows_tbl, TBL_FLOW_BYTES, n);
-	ui_table_data_bind(&flows_tbl, TBL_FLOW_RATE, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_ADDRESS, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_PORT, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_GEO, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_BYTES, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_RATE, n);
 }
 
 static void draw_flow_entry(const struct flow_entry *n)
@@ -990,6 +1037,10 @@ static void draw_flow_entry(const struct flow_entry *n)
 	if (show_src) {
 		ui_table_row_add(&flows_tbl);
 
+		ui_table_row_print(&flows_tbl, TBL_FLOW_PROCESS, " ");
+		ui_table_row_print(&flows_tbl, TBL_FLOW_PID, " ");
+		ui_table_row_print(&flows_tbl, TBL_FLOW_PROTO, " ");
+		ui_table_row_print(&flows_tbl, TBL_FLOW_STATE, " ");
 		ui_table_row_print(&flows_tbl, TBL_FLOW_TIME, "-->");
 
 		print_flow_peer_info(n, FLOW_DIR_DST);
@@ -1239,46 +1290,97 @@ static void flows_data_bind(struct ui_table *tbl, int col_id, const void *data)
 	case TBL_FLOW_PROCESS:
 		ui_table_row_print(tbl, col_id, n->procname);
 		break;
+
 	case TBL_FLOW_PID:
 		slprintf(tmp, sizeof(tmp), "%.d", n->procnum);
 		ui_table_row_print(tbl, col_id, tmp);
 		break;
+
 	case TBL_FLOW_PROTO:
 		ui_table_row_print(tbl, col_id, l4proto2str[n->l4_proto]);
 		break;
+
 	case TBL_FLOW_STATE:
 		ui_table_row_print(tbl, col_id, flow_state2str(n));
 		break;
+
 	case TBL_FLOW_TIME:
 		time2str(n->timestamp_start, tmp, sizeof(tmp));
 		ui_table_row_print(tbl, col_id, tmp);
 		break;
-	case TBL_FLOW_ADDRESS:
+
+	case TBL_FLOW_SRC_ADDRESS:
+		ui_table_row_print(tbl, col_id, n->rev_dns_src);
+		break;
+
+	case TBL_FLOW_DST_ADDRESS:
 		ui_table_row_print(tbl, col_id,
 				SELFLD(dir, rev_dns_src, rev_dns_dst));
 		break;
-	case TBL_FLOW_PORT:
+	case TBL_FLOW_SRC_PORT:
+		ui_table_row_print(tbl, col_id,
+				flow_port2str(n, tmp, sizeof(tmp), FLOW_DIR_SRC));
+		break;
+
+	case TBL_FLOW_DST_PORT:
 		ui_table_row_print(tbl, col_id,
 				flow_port2str(n, tmp, sizeof(tmp), dir));
 		break;
-	case TBL_FLOW_GEO:
+
+	case TBL_FLOW_SRC_GEO:
+		ui_table_row_print(tbl, col_id, n->country_code_src);
+		break;
+
+	case TBL_FLOW_DST_GEO:
 		ui_table_row_print(tbl, col_id,
 				SELFLD(dir, country_code_src, country_code_dst));
 		break;
-	case TBL_FLOW_BYTES:
+
+	case TBL_FLOW_SRC_BYTES:
+		ui_table_row_print(tbl, col_id,
+				bandw2str(n->bytes_src, tmp, sizeof(tmp) - 1));
+		break;
+
+	case TBL_FLOW_DST_BYTES:
 		ui_table_row_print(tbl, col_id,
 				bandw2str(SELFLD(dir, bytes_src, bytes_dst),
 					tmp, sizeof(tmp) - 1));
 		break;
-	case TBL_FLOW_RATE:
+
+	case TBL_FLOW_SRC_PKTS:
+		snprintf(tmp, sizeof(tmp) - 1, "%lu", n->pkts_src);
+		ui_table_row_print(tbl, col_id, tmp);
+		break;
+
+	case TBL_FLOW_DST_PKTS:
+		snprintf(tmp, sizeof(tmp) - 1, "%lu", n->pkts_dst);
+		ui_table_row_print(tbl, col_id, tmp);
+		break;
+
+	case TBL_FLOW_SRC_RATE:
+		ui_table_row_print(tbl, col_id,
+				rate2str(n->rate_bytes_src, tmp, sizeof(tmp) - 1));
+		break;
+
+	case TBL_FLOW_DST_RATE:
 		ui_table_row_print(tbl, col_id,
 				rate2str(SELFLD(dir, rate_bytes_src, rate_bytes_dst),
 					tmp, sizeof(tmp) - 1));
 		break;
+
+	case TBL_FLOW_SRC_PPS:
+		snprintf(tmp, sizeof(tmp) - 1, "%llu", (unsigned long long)n->rate_pkts_src);
+		ui_table_row_print(tbl, col_id, tmp);
+		break;
+
+	case TBL_FLOW_DST_PPS:
+		snprintf(tmp, sizeof(tmp) - 1, "%llu", (unsigned long long)n->rate_pkts_dst);
+		ui_table_row_print(tbl, col_id, tmp);
+		break;
 	}
 }
 
-static void flows_table_init(struct ui_table *tbl)
+static void flows_table_init_curses(struct ui_table *tbl)
 {
 	ui_table_init(tbl);
 
@@ -1290,15 +1392,15 @@ static void flows_table_init(struct ui_table *tbl)
 	ui_table_col_add(tbl, TBL_FLOW_PROTO, "PROTO", 6);
 	ui_table_col_add(tbl, TBL_FLOW_STATE, "STATE", 11);
 	ui_table_col_add(tbl, TBL_FLOW_TIME, "TIME", 4);
-	ui_table_col_add(tbl, TBL_FLOW_ADDRESS, "ADDRESS", 50);
-	ui_table_col_add(tbl, TBL_FLOW_PORT, "PORT", 8);
-	ui_table_col_add(tbl, TBL_FLOW_GEO, "GEO", 3);
-	ui_table_col_add(tbl, TBL_FLOW_BYTES, "BYTES", 10);
-	ui_table_col_add(tbl, TBL_FLOW_RATE, "RATE", 10);
+	ui_table_col_add(tbl, TBL_FLOW_DST_ADDRESS, "ADDRESS", 50);
+	ui_table_col_add(tbl, TBL_FLOW_DST_PORT, "PORT", 8);
+	ui_table_col_add(tbl, TBL_FLOW_DST_GEO, "GEO", 3);
+	ui_table_col_add(tbl, TBL_FLOW_DST_BYTES, "BYTES", 10);
+	ui_table_col_add(tbl, TBL_FLOW_DST_RATE, "RATE", 10);
 
 	ui_table_col_align_set(tbl, TBL_FLOW_TIME, UI_ALIGN_RIGHT);
-	ui_table_col_align_set(tbl, TBL_FLOW_BYTES, UI_ALIGN_RIGHT);
-	ui_table_col_align_set(tbl, TBL_FLOW_RATE, UI_ALIGN_RIGHT);
+	ui_table_col_align_set(tbl, TBL_FLOW_DST_BYTES, UI_ALIGN_RIGHT);
+	ui_table_col_align_set(tbl, TBL_FLOW_DST_RATE, UI_ALIGN_RIGHT);
 
 	ui_table_col_color_set(tbl, TBL_FLOW_PROCESS, COLOR(YELLOW, BLACK));
 	ui_table_col_color_set(tbl, TBL_FLOW_PID, A_BOLD);
@@ -1325,7 +1427,9 @@ static void presenter_curses(void)
 	INIT_COLOR(GREEN, BLACK);
 	INIT_COLOR(BLACK, GREEN);
 
-        flows_table_init(&flows_tbl);
+	ui_init(UI_CURSES);
+
+        flows_table_init_curses(&flows_tbl);
 
 	rcu_register_thread();
 	while (!sigint) {
@@ -1399,12 +1503,104 @@ static void presenter_curses(void)
 	screen_end();
 }
 
+static void flows_fmt_csv(struct ui_table *tbl, int col_id, const char *str)
+{
+	printf("%s,", str);
+}
+
+static void flows_table_init_stdout(struct ui_table *tbl)
+{
+	ui_table_init(tbl);
+
+	ui_table_col_add(tbl, TBL_FLOW_PROCESS, "PROCESS", 13);
+	ui_table_col_add(tbl, TBL_FLOW_PID, "PID", 7);
+	ui_table_col_add(tbl, TBL_FLOW_PROTO, "PROTO", 6);
+	ui_table_col_add(tbl, TBL_FLOW_STATE, "STATE", 11);
+	ui_table_col_add(tbl, TBL_FLOW_TIME, "TIME", 4);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_ADDRESS, "SRC_ADDR", 50);
+	ui_table_col_add(tbl, TBL_FLOW_DST_ADDRESS, "DST_ADDR", 50);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_PORT, "SRC_PORT", 8);
+	ui_table_col_add(tbl, TBL_FLOW_DST_PORT, "DST_PORT", 8);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_GEO, "SRC_GEO", 3);
+	ui_table_col_add(tbl, TBL_FLOW_DST_GEO, "DST_GEO", 3);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_BYTES, "SRC_BYTES", 10);
+	ui_table_col_add(tbl, TBL_FLOW_DST_BYTES, "DST_BYTES", 10);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_RATE, "SRC_RATE", 10);
+	ui_table_col_add(tbl, TBL_FLOW_DST_RATE, "DST_RATE", 10);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_PKTS, "SRC_PKTS", 10);
+	ui_table_col_add(tbl, TBL_FLOW_DST_PKTS, "DST_PKTS", 10);
+	ui_table_col_add(tbl, TBL_FLOW_SRC_PPS, "SRC_PPS", 10);
+	ui_table_col_add(tbl, TBL_FLOW_DST_PPS, "DST_PPS", 10);
+
+	ui_table_col_print_set(&flows_tbl, flows_fmt_csv);
+	ui_table_data_bind_set(&flows_tbl, flows_data_bind);
+}
+
+static void presenter_stdout(void)
+{
+	struct flow_entry *n;
+
+	ui_init(UI_STDOUT);
+
+        flows_table_init_stdout(&flows_tbl);
+	ui_table_header_print(&flows_tbl);
+
+	collector_dump_flows();
+
+	if (interval > 0) {
+		struct nfct_handle *ct_event;
+
+		ct_event = collector_create_updater();
+
+		usleep(USEC_PER_SEC * interval);
+
+		collector_refresh_flows(ct_event);
+		nfct_close(ct_event);
+	}
+
+	for (n = flow_list.head; n; n = n->next) {
+		if (!n->is_visible)
+			continue;
+		if (presenter_flow_wrong_state(n))
+			continue;
+
+		ui_table_row_add(&flows_tbl);
+
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_PROCESS, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_PID, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_PROTO, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_STATE, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_TIME, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_ADDRESS, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_ADDRESS, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_PORT, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_PORT, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_GEO, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_GEO, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_BYTES, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_BYTES, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_RATE, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_RATE, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_PKTS, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_PKTS, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_SRC_PPS, n);
+		ui_table_data_bind(&flows_tbl, TBL_FLOW_DST_PPS, n);
+
+	}
+
+	printf("\n");
+	fflush(stdout);
+}
+
 static void presenter(void)
 {
 	lookup_init(LT_PORTS_TCP);
 	lookup_init(LT_PORTS_UDP);
 
-	presenter_curses();
+	if (do_csv)
+		presenter_stdout();
+	else
+		presenter_curses();
 
 	lookup_cleanup(LT_PORTS_UDP);
 	lookup_cleanup(LT_PORTS_TCP);
@@ -1494,8 +1690,7 @@ static int flow_event_cb(enum nf_conntrack_msg_type type,
 	if (sigint)
 		return NFCT_CB_STOP;
 
-	synchronize_rcu();
-	spinlock_lock(&flow_list.lock);
+	flow_list_write_lock(&flow_list);
 
 	switch (type) {
 	case NFCT_T_NEW:
@@ -1511,7 +1706,7 @@ static int flow_event_cb(enum nf_conntrack_msg_type type,
 		break;
 	}
 
-	spinlock_unlock(&flow_list.lock);
+	flow_list_unlock(&flow_list);
 
 	if (sigint)
 		return NFCT_CB_STOP;
@@ -1579,8 +1774,7 @@ static int flow_dump_cb(enum nf_conntrack_msg_type type __maybe_unused,
 	if (sigint)
 		return NFCT_CB_STOP;
 
-	synchronize_rcu();
-	spinlock_lock(&flow_list.lock);
+	flow_list_write_lock(&flow_list);
 
 	if (!(what & ~(INCLUDE_IPV4 | INCLUDE_IPV6)))
 		goto check_addr;
@@ -1637,7 +1831,7 @@ check_addr:
 	flow_list_new_entry(&flow_list, ct);
 
 skip_flow:
-	spinlock_unlock(&flow_list.lock);
+	flow_list_unlock(&flow_list);
 	return NFCT_CB_CONTINUE;
 }
 
@@ -1664,12 +1858,9 @@ static void collector_dump_flows(void)
 	nfct_close(nfct);
 }
 
-static void *collector(void *null __maybe_unused)
+static struct nfct_handle *collector_create_updater(void)
 {
 	struct nfct_handle *ct_event;
-	struct pollfd poll_fd[1];
-
-	flow_list_init(&flow_list);
 
 	ct_event = nfct_open(CONNTRACK, NF_NETLINK_CONNTRACK_NEW |
 				      NF_NETLINK_CONNTRACK_UPDATE |
@@ -1680,6 +1871,16 @@ static void *collector(void *null __maybe_unused)
 	collector_create_filter(ct_event);
 
 	nfct_callback_register(ct_event, NFCT_T_ALL, flow_event_cb, NULL);
+
+	return ct_event;
+}
+
+static void *collector(void *null __maybe_unused)
+{
+	struct nfct_handle *ct_event;
+	struct pollfd poll_fd[1];
+
+	ct_event = collector_create_updater();
 
 	poll_fd[0].fd = nfct_fd(ct_event);
 	poll_fd[0].events = POLLIN;
@@ -1724,7 +1925,6 @@ static void *collector(void *null __maybe_unused)
 
 	rcu_unregister_thread();
 
-	flow_list_destroy(&flow_list);
 	spinlock_destroy(&flow_list.lock);
 
 	nfct_close(ct_event);
@@ -1736,6 +1936,7 @@ int main(int argc, char **argv)
 {
 	pthread_t tid;
 	int ret, c, opt_index, what_cmd = 0;
+	int delay = -1;
 
 	setfsuid(getuid());
 	setfsgid(getgid());
@@ -1775,13 +1976,16 @@ int main(int argc, char **argv)
 			die();
 			break;
 		case 't':
-			interval = strtoul(optarg, NULL, 10);
+			delay = strtoul(optarg, NULL, 10);
 			break;
 		case 'n':
 			resolve_dns = false;
 			break;
 		case 'G':
 			resolve_geoip = false;
+			break;
+		case 'c':
+			do_csv = true;
 			break;
 		case 'h':
 			help();
@@ -1793,6 +1997,13 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
+
+	if (!do_csv && delay == -1)
+		interval = 1;
+	else if (delay == -1)
+		interval = 0;
+	else
+		interval = delay;
 
 	if (what_cmd > 0) {
 		what = what_cmd;
@@ -1816,11 +2027,17 @@ int main(int argc, char **argv)
 	if (resolve_geoip)
 		init_geoip(1);
 
-	ret = pthread_create(&tid, NULL, collector, NULL);
-	if (ret < 0)
-		panic("Cannot create phthread!\n");
+	flow_list_init(&flow_list);
+
+	if (!do_csv) {
+		ret = pthread_create(&tid, NULL, collector, NULL);
+		if (ret < 0)
+			panic("Cannot create phthread!\n");
+	}
 
 	presenter();
+
+	flow_list_destroy(&flow_list);
 
 	if (resolve_geoip)
 		destroy_geoip();
