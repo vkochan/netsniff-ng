@@ -6,6 +6,11 @@
 
 #include "list.h"
 
+enum ui_type {
+	UI_CURSES,
+	UI_STDOUT,
+};
+
 enum ui_align {
 	UI_ALIGN_LEFT,
 	UI_ALIGN_RIGHT,
@@ -31,6 +36,8 @@ struct ui_table {
 	int width;
 	int height;
 };
+
+extern void ui_init(enum ui_type mode);
 
 extern void ui_table_init(struct ui_table *tbl);
 extern void ui_table_uninit(struct ui_table *tbl);

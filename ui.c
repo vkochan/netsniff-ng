@@ -8,13 +8,39 @@
 #include "ui.h"
 #include "xmalloc.h"
 
-#define ui_print_yx(y, x, fmt, ...) mvprintw(y, x, fmt, ##__VA_ARGS__)
+static enum ui_type ui = UI_CURSES;
+
+#define ui_print_yx(y, x, fmt, ...) \
+do { \
+	if (ui == UI_CURSES) \
+		mvprintw(y, x, fmt, ##__VA_ARGS__); \
+	else \
+		printf(fmt, ##__VA_ARGS__); \
+} while (0)
+
+static void ui_color_on(int color)
+{
+	if (ui == UI_CURSES)
+		attron(color);
+}
+
+static void ui_color_off(int color)
+{
+	if (ui == UI_CURSES)
+		attroff(color);
+}
+
+void ui_init(enum ui_type mode)
+{
+	ui = mode;
+}
 
 void ui_table_init(struct ui_table *tbl)
 {
 	memset(tbl, 0, sizeof(*tbl));
 
-	getsyx(tbl->y, tbl->x);
+	if (ui == UI_CURSES)
+		getsyx(tbl->y, tbl->x);
 
 	tbl->rows_y  = tbl->y;
 	tbl->width   = COLS;
@@ -93,6 +119,9 @@ void ui_table_col_align_set(struct ui_table *tbl, int col_id, enum ui_align alig
 void ui_table_row_add(struct ui_table *tbl)
 {
 	tbl->rows_y++;
+
+	if (ui == UI_STDOUT)
+		printf("\n");
 }
 
 void ui_table_clear(struct ui_table *tbl)
@@ -119,9 +148,9 @@ void ui_table_row_print(struct ui_table *tbl, uint32_t col_id, const char *str)
 {
 	struct ui_col *col = ui_table_col_get(tbl, col_id);
 
-	attron(col->color);
+	ui_color_on(col->color);
 	__ui_table_row_print(tbl, col, str);
-	attroff(col->color);
+	ui_color_off(col->color);
 }
 
 void ui_table_header_color_set(struct ui_table *tbl, int color)
@@ -140,16 +169,21 @@ void ui_table_header_print(struct ui_table *tbl)
 	int max_width = tbl->width;
 	int width = 0;
 
-	attron(tbl->hdr_color);
+	ui_color_on(tbl->hdr_color);
 
-	ui_print_yx(tbl->y, tbl->x, "%-*.*s", max_width - tbl->x, max_width - tbl->x, "");
-	ui_print_yx(tbl->y, tbl->x, "");
+	if (ui == UI_CURSES)
+		ui_print_yx(tbl->y, tbl->x, "%-*.*s", max_width - tbl->x,
+				max_width - tbl->x, "");
+
+	ui_print_yx(tbl->y, tbl->x, "%s", "");
 
 	list_for_each_entry(col, &tbl->cols, entry) {
 		__ui_table_row_print(tbl, col, col->name);
 		width += col->len + tbl->col_pad;
 	}
 
-	ui_print_yx(tbl->y, width, "%*s", max_width - width, " ");
-	attroff(tbl->hdr_color);
+	if (ui == UI_CURSES)
+		ui_print_yx(tbl->y, width, "%*s", max_width - width, " ");
+
+	ui_color_off(tbl->hdr_color);
 }
