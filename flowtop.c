@@ -1278,14 +1278,11 @@ static void flows_table_init(struct ui_table *tbl)
 	ui_table_header_color_set(&flows_tbl, COLOR(BLACK, GREEN));
 }
 
-static void presenter(void)
+static void presenter_curses(void)
 {
 	bool show_help = false;
 	int skip_lines = 0;
 	WINDOW *screen;
-
-	lookup_init(LT_PORTS_TCP);
-	lookup_init(LT_PORTS_UDP);
 
 	screen = screen_init(false);
 	wclear(screen);
@@ -1367,10 +1364,17 @@ static void presenter(void)
 		usleep(80000);
 	}
 	rcu_unregister_thread();
-
 	ui_table_uninit(&flows_tbl);
-
 	screen_end();
+}
+
+static void presenter(void)
+{
+	lookup_init(LT_PORTS_TCP);
+	lookup_init(LT_PORTS_UDP);
+
+	presenter_curses();
+
 	lookup_cleanup(LT_PORTS_UDP);
 	lookup_cleanup(LT_PORTS_TCP);
 }
