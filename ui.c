@@ -133,6 +133,13 @@ void ui_table_data_bind(struct ui_table *tbl, int col_id, const void *data)
 	tbl->data_bind(tbl, col->id, data);
 }
 
+void ui_table_col_print_set(struct ui_table *tbl,
+			    void (*func)(struct ui_table *tbl,
+					 int col_id, const char *str))
+{
+	tbl->col_print = func;
+}
+
 void ui_table_row_add(struct ui_table *tbl)
 {
 	tbl->rows_y++;
@@ -157,6 +164,11 @@ void ui_table_clear(struct ui_table *tbl)
 static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
 				 const char *str)
 {
+	if (tbl->col_print) {
+		tbl->col_print(tbl, col->id, str);
+		return;
+	}
+
 	ui_print_yx(tbl->rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, str);
 	ui_print_yx(tbl->rows_y, col->pos + col->len, "%*s", tbl->col_pad, " ");
 }
