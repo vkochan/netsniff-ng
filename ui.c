@@ -42,7 +42,6 @@ void ui_table_init(struct ui_table *tbl)
 	if (ui == UI_CURSES)
 		getsyx(tbl->y, tbl->x);
 
-	tbl->rows_y      = tbl->y;
 	tbl->width       = COLS;
 	tbl->height      = LINES - 2;
 	tbl->col_pad     = 1;
@@ -63,7 +62,11 @@ void ui_table_pos_set(struct ui_table *tbl, int y, int x)
 {
 	tbl->y      = y;
 	tbl->x      = x;
-	tbl->rows_y = y;
+}
+
+int ui_table_rows_count(struct ui_table *tbl)
+{
+	return tbl->rows_count;
 }
 
 static struct ui_col *ui_table_col_get(struct ui_table *tbl, uint32_t id)
@@ -148,7 +151,7 @@ void ui_table_col_print_set(struct ui_table *tbl,
 
 void ui_table_row_add(struct ui_table *tbl)
 {
-	tbl->rows_y++;
+	tbl->rows_count++;
 
 	if (ui == UI_STDOUT)
 		printf("\n");
@@ -158,7 +161,7 @@ void ui_table_clear(struct ui_table *tbl)
 {
 	int y;
 
-	tbl->rows_y = tbl->y;
+	tbl->rows_count = 0;
 
 	for (y = tbl->y + 1; y < tbl->y + tbl->height; y++) {
 		ui_print_yx(y, tbl->x, "%*s", tbl->width, " ");
@@ -171,6 +174,7 @@ static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
 				 const char *str)
 {
 	const char *tmp;
+	int rows_y;
 
 	if (!str || !strlen(str))
 		tmp = tbl->default_col;
@@ -182,8 +186,10 @@ static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
 		return;
 	}
 
-	ui_print_yx(tbl->rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, tmp);
-	ui_print_yx(tbl->rows_y, col->pos + col->len, "%*s", tbl->col_pad, " ");
+	rows_y = tbl->y + tbl->rows_count;
+
+	ui_print_yx(rows_y, col->pos, UI_ALIGN_COL(col), col->len, col->len, tmp);
+	ui_print_yx(rows_y, col->pos + col->len, "%*s", tbl->col_pad, " ");
 }
 
 void ui_table_row_print(struct ui_table *tbl, uint32_t col_id, const char *str)

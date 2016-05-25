@@ -29,7 +29,7 @@ struct ui_col {
 struct ui_table {
 	int y;
 	int x;
-	int rows_y;
+	int rows_count;
 	struct list_head cols;
 	int hdr_color;
 	int col_pad;
@@ -47,6 +47,7 @@ extern void ui_table_init(struct ui_table *tbl);
 extern void ui_table_uninit(struct ui_table *tbl);
 extern void ui_table_clear(struct ui_table *tbl);
 extern void ui_table_pos_set(struct ui_table *tbl, int y, int x);
+extern int ui_table_rows_count(struct ui_table *tbl);
 extern void ui_table_height_set(struct ui_table *tbl, int height);
 
 extern void ui_table_col_add(struct ui_table *tbl, uint32_t id, char *name,
