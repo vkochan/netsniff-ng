@@ -98,6 +98,19 @@ static struct ui_col *ui_table_col_get(struct ui_table *tbl, uint32_t id)
 	bug();
 }
 
+#define UI_ALIGN_COL(col) (((col)->align == UI_ALIGN_LEFT) ? "%-*.*s" : "%*.*s")
+static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
+				 int color, const char *str)
+{
+	char tmp[128];
+
+	slprintf(tmp, sizeof(tmp), UI_ALIGN_COL(col), col->len, col->len, str);
+	ui_text_attr_insert(tbl->row, col->pos, color, tmp);
+
+	slprintf(tmp, sizeof(tmp), "%*s", tbl->col_pad, tbl->delim);
+	ui_text_attr_insert(tbl->row, col->pos + col->len, color, tmp);
+}
+
 static void __ui_table_pos_update(struct ui_table *tbl)
 {
 	struct ui_col *col;
@@ -113,10 +126,11 @@ void ui_table_col_add(struct ui_table *tbl, uint32_t id, const char *name, uint3
 {
 	struct ui_col *col = xzmalloc(sizeof(*col));
 
-	col->id    = id;
-	col->name  = name;
-	col->len   = len;
-	col->align = UI_ALIGN_LEFT;
+	col->id    	= id;
+	col->is_enabled = true;
+	col->name  	= name;
+	col->len        = len;
+	col->align      = UI_ALIGN_LEFT;
 
 	cds_list_add_tail(&col->entry, &tbl->cols);
 
@@ -142,9 +156,47 @@ void ui_table_col_delim_set(struct ui_table *tbl, const char *delim)
 	tbl->delim = delim;
 }
 
+void ui_table_col_enable_set(struct ui_table *tbl, int col_id, bool enable)
+{
+	struct ui_col *col = ui_table_col_get(tbl, col_id);
+
+	col->is_enabled = enable;
+}
+
+void ui_table_data_bind_set(struct ui_table *tbl,
+					void (* data_bind)(struct ui_table
+						*tbl, int col_id, const void *data))
+{
+	tbl->data_bind = data_bind;
+}
+
+void ui_table_row_bind(struct ui_table *tbl, const void *data)
+{
+	struct ui_col *col;
+
+	bug_on(!tbl);
+	bug_on(!tbl->data_bind);
+
+	ui_table_row_add(tbl);
+
+	cds_list_for_each_entry(col, &tbl->cols, entry) {
+		if (!col->is_enabled)
+			__ui_table_row_print(tbl, col, col->color, "");
+		else
+			tbl->data_bind(tbl, col->id, data);
+	}
+
+	ui_table_row_show(tbl);
+}
+
 void ui_table_row_add(struct ui_table *tbl)
 {
 	tbl->rows_y++;
+}
+
+int ui_table_rows_count(const struct ui_table *tbl)
+{
+	return tbl->rows_y - tbl->y;
 }
 
 void ui_table_clear(struct ui_table *tbl)
@@ -158,24 +210,10 @@ void ui_table_clear(struct ui_table *tbl)
 	}
 }
 
-#define UI_ALIGN_COL(col) (((col)->align == UI_ALIGN_LEFT) ? "%-*.*s" : "%*.*s")
-
 void ui_table_row_show(struct ui_table *tbl)
 {
 	mvaddchstr(tbl->rows_y, tbl->x, tbl->row->str + tbl->scroll_x);
 	ui_text_len_set(tbl->row, 0);
-}
-
-static void __ui_table_row_print(struct ui_table *tbl, struct ui_col *col,
-				 int color, const char *str)
-{
-	char tmp[128];
-
-	slprintf(tmp, sizeof(tmp), UI_ALIGN_COL(col), col->len, col->len, str);
-	ui_text_attr_insert(tbl->row, col->pos, color, tmp);
-
-	slprintf(tmp, sizeof(tmp), "%*s", tbl->col_pad, tbl->delim);
-	ui_text_attr_insert(tbl->row, col->pos + col->len, color, tmp);
 }
 
 void ui_table_row_col_set(struct ui_table *tbl, uint32_t col_id, const char *str)

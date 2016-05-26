@@ -970,19 +970,27 @@ static void print_flow_peer_info(const struct flow_entry *n, enum flow_direction
 	int country_color = COLOR(GREEN, BLACK);
 	int addr_color = dst_color;
 	int port_color = A_BOLD;
-	char tmp[128];
+	bool show_common_info = true;
 
 	if (show_src && dir == FLOW_DIR_SRC) {
 		country_color  = src_color;
 		counters_color = src_color;
 		port_color    |= src_color;
 		addr_color     = src_color;
+		show_common_info = true;
 	} else if (show_src && FLOW_DIR_DST) {
 		country_color  = dst_color;
 		counters_color = dst_color;
 		port_color    |= dst_color;
 		addr_color     = dst_color;
+		show_common_info = false;
 	}
+
+	ui_table_col_enable_set(&flows_tbl, TBL_FLOW_PROCESS, show_common_info);
+	ui_table_col_enable_set(&flows_tbl, TBL_FLOW_PID, show_common_info);
+	ui_table_col_enable_set(&flows_tbl, TBL_FLOW_PROTO, show_common_info);
+	ui_table_col_enable_set(&flows_tbl, TBL_FLOW_STATE, show_common_info);
+	ui_table_col_enable_set(&flows_tbl, TBL_FLOW_TIME, show_common_info);
 
 	ui_table_col_color_set(&flows_tbl, TBL_FLOW_ADDRESS, addr_color);
 	ui_table_col_color_set(&flows_tbl, TBL_FLOW_PORT, port_color);
@@ -990,69 +998,15 @@ static void print_flow_peer_info(const struct flow_entry *n, enum flow_direction
 	ui_table_col_color_set(&flows_tbl, TBL_FLOW_BYTES, counters_color);
 	ui_table_col_color_set(&flows_tbl, TBL_FLOW_RATE, counters_color);
 
-	/* Reverse DNS/IP */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_ADDRESS,
-			      SELFLD(dir, rev_dns_src, rev_dns_dst));
-
-	/* Application port */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PORT,
-			      flow_port2str(n, tmp, sizeof(tmp), dir));
-
-	/* GEO */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_GEO,
-			      SELFLD(dir, country_code_src, country_code_dst));
-
-	/* Bytes */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_BYTES,
-			      bandw2str(SELFLD(dir, bytes_src, bytes_dst),
-					tmp, sizeof(tmp) - 1));
-
-	/* Rate bytes */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_RATE,
-			      rate2str(SELFLD(dir, rate_bytes_src, rate_bytes_dst),
-				       tmp, sizeof(tmp) - 1));
+	ui_table_row_bind(&flows_tbl, n);
 }
 
 static void draw_flow_entry(const struct flow_entry *n)
 {
-	char tmp[128];
-
-	ui_table_row_add(&flows_tbl);
-
-	/* Application */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PROCESS,
-			      n->proc ?  n->proc->name : "");
-
-	/* PID */
-	slprintf(tmp, sizeof(tmp), "%.d", n->proc ? n->proc->pid : 0);
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PID, tmp);
-
-	/* L4 protocol */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PROTO, l4proto2str[n->l4_proto]);
-
-	/* L4 protocol state */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_STATE, flow_state2str(n));
-
-	/* Time */
-	time2str(n->timestamp_start, tmp, sizeof(tmp));
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_TIME, tmp);
-
 	print_flow_peer_info(n, show_src ? FLOW_DIR_SRC : FLOW_DIR_DST);
 
-	ui_table_row_show(&flows_tbl);
-
-	if (show_src) {
-		ui_table_row_add(&flows_tbl);
-
-		ui_table_row_col_set(&flows_tbl, TBL_FLOW_PROCESS, "");
-		ui_table_row_col_set(&flows_tbl, TBL_FLOW_PID, "");
-		ui_table_row_col_set(&flows_tbl, TBL_FLOW_PROTO, "");
-		ui_table_row_col_set(&flows_tbl, TBL_FLOW_STATE, "");
-		ui_table_row_col_set(&flows_tbl, TBL_FLOW_TIME, "");
-
+	if (show_src)
 		print_flow_peer_info(n, FLOW_DIR_DST);
-		ui_table_row_show(&flows_tbl);
-	}
 }
 
 static inline bool presenter_flow_wrong_state(struct flow_entry *n)
@@ -1192,39 +1146,7 @@ static void draw_flows(WINDOW *screen, struct flow_list *fl,
 
 static void draw_proc_entry(struct proc_entry *p)
 {
-	struct ui_table *tbl = &procs_tbl;;
-	char tmp[128];
-
-	ui_table_row_add(tbl);
-
-	/* Application */
-	ui_table_row_col_set(tbl, TBL_PROC_NAME, p->name);
-
-	/* PID */
-	slprintf(tmp, sizeof(tmp), "%.d", p->pid);
-	ui_table_row_col_set(tbl, TBL_PROC_PID, tmp);
-
-	/* Flows */
-	slprintf(tmp, sizeof(tmp), "%.d", p->flows_count);
-	ui_table_row_col_set(tbl, TBL_PROC_FLOWS, tmp);
-
-	/* Bytes Src */
-	bandw2str(p->bytes_src, tmp, sizeof(tmp) - 1);
-	ui_table_row_col_set(tbl, TBL_PROC_BYTES_SRC, tmp);
-
-	/* Rate Src */
-	rate2str(p->rate_bytes_src, tmp, sizeof(tmp) - 1);
-	ui_table_row_col_set(tbl, TBL_PROC_RATE_SRC, tmp);
-
-	/* Bytes Dest */
-	bandw2str(p->bytes_dst, tmp, sizeof(tmp) - 1);
-	ui_table_row_col_set(tbl, TBL_PROC_BYTES_DST, tmp);
-
-	/* Rate Dest */
-	rate2str(p->rate_bytes_dst, tmp, sizeof(tmp) - 1);
-	ui_table_row_col_set(tbl, TBL_PROC_RATE_DST, tmp);
-
-	ui_table_row_show(tbl);
+	ui_table_row_bind(&procs_tbl, p);
 }
 
 static void draw_procs(WINDOW *screen, struct flow_list *fl,
@@ -1355,6 +1277,81 @@ static void show_option_toggle(int opt)
 	}
 }
 
+static void flows_data_bind(struct ui_table *tbl, int col_id, const void *data)
+{
+	enum flow_direction dir = FLOW_DIR_DST;
+	const struct flow_entry *n;
+	int rows_count;
+	char tmp[128];
+
+	bug_on(!data);
+
+	if (show_src) {
+		rows_count = ui_table_rows_count(tbl);
+		dir = rows_count % 2 == 0 ? FLOW_DIR_DST : FLOW_DIR_SRC;
+	}
+
+	n = (struct flow_entry *)data;
+
+	switch (col_id) {
+	case TBL_FLOW_PROCESS:
+		if (n->proc)
+			ui_table_row_col_set(tbl, col_id, n->proc->name);
+		else
+			ui_table_row_col_set(tbl, col_id, "");
+		break;
+
+	case TBL_FLOW_PID:
+		if (n->proc)
+			slprintf(tmp, sizeof(tmp), "%.d", n->proc->pid);
+		else
+			tmp[0] = '\0';
+
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_FLOW_PROTO:
+		ui_table_row_col_set(tbl, col_id, l4proto2str[n->l4_proto]);
+		break;
+
+	case TBL_FLOW_STATE:
+		ui_table_row_col_set(tbl, col_id, flow_state2str(n));
+		break;
+
+	case TBL_FLOW_TIME:
+		time2str(n->timestamp_start, tmp, sizeof(tmp));
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_FLOW_ADDRESS:
+		ui_table_row_col_set(tbl, col_id,
+				SELFLD(dir, rev_dns_src, rev_dns_dst));
+		break;
+
+	case TBL_FLOW_PORT:
+		ui_table_row_col_set(tbl, col_id,
+				flow_port2str(n, tmp, sizeof(tmp), dir));
+		break;
+
+	case TBL_FLOW_GEO:
+		ui_table_row_col_set(tbl, col_id,
+				SELFLD(dir, country_code_src, country_code_dst));
+		break;
+
+	case TBL_FLOW_BYTES:
+		ui_table_row_col_set(tbl, col_id,
+				bandw2str(SELFLD(dir, bytes_src, bytes_dst),
+					tmp, sizeof(tmp) - 1));
+		break;
+
+	case TBL_FLOW_RATE:
+		ui_table_row_col_set(tbl, col_id,
+				rate2str(SELFLD(dir, rate_bytes_src, rate_bytes_dst),
+					tmp, sizeof(tmp) - 1));
+		break;
+	}
+}
+
 static void flows_table_init(struct ui_table *tbl)
 {
 	ui_table_init(tbl);
@@ -1382,6 +1379,50 @@ static void flows_table_init(struct ui_table *tbl)
 	ui_table_col_color_set(tbl, TBL_FLOW_STATE, COLOR(YELLOW, BLACK));
 
 	ui_table_header_color_set(&flows_tbl, COLOR(BLACK, GREEN));
+
+	ui_table_data_bind_set(&flows_tbl, flows_data_bind);
+}
+
+static void procs_data_bind(struct ui_table *tbl, int col_id, const void *data)
+{
+	const struct proc_entry *p = data;
+	char tmp[128];
+
+	switch (col_id) {
+	case TBL_PROC_NAME:
+		ui_table_row_col_set(tbl, col_id, p->name);
+		break;
+
+	case TBL_PROC_PID:
+		slprintf(tmp, sizeof(tmp), "%.d", p->pid);
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_PROC_FLOWS:
+		slprintf(tmp, sizeof(tmp), "%.d", p->flows_count);
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_PROC_BYTES_SRC:
+		bandw2str(p->bytes_src, tmp, sizeof(tmp) - 1);
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_PROC_RATE_SRC:
+		rate2str(p->rate_bytes_src, tmp, sizeof(tmp) - 1);
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_PROC_BYTES_DST:
+		bandw2str(p->bytes_dst, tmp, sizeof(tmp) - 1);
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+
+	case TBL_PROC_RATE_DST:
+		rate2str(p->rate_bytes_dst, tmp, sizeof(tmp) - 1);
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+	}
 }
 
 static void procs_table_init(struct ui_table *tbl)
@@ -1413,6 +1454,8 @@ static void procs_table_init(struct ui_table *tbl)
 	ui_table_col_color_set(tbl, TBL_PROC_RATE_DST, COLOR(BLUE, BLACK));
 
 	ui_table_header_color_set(tbl, COLOR(BLACK, GREEN));
+
+	ui_table_data_bind_set(tbl, procs_data_bind);
 }
 
 static void tab_main_on_open(struct ui_tab *tab, enum ui_tab_event_t evt, uint32_t id)
