@@ -142,9 +142,31 @@ void ui_table_col_delim_set(struct ui_table *tbl, const char *delim)
 	tbl->delim = delim;
 }
 
+void ui_table_data_bind_set(struct ui_table *tbl,
+			    void (*func)(struct ui_table *tbl,
+					 int col_id, const void *data))
+{
+	tbl->data_bind = func;
+}
+
+void ui_table_data_bind(struct ui_table *tbl, int col_id, const void *data)
+{
+	struct ui_col *col = ui_table_col_get(tbl, col_id);
+
+	bug_on(!tbl);
+	bug_on(!tbl->data_bind);
+
+	tbl->data_bind(tbl, col->id, data);
+}
+
 void ui_table_row_add(struct ui_table *tbl)
 {
 	tbl->rows_y++;
+}
+
+int ui_table_rows_count(const struct ui_table *tbl)
+{
+	return tbl->rows_y - tbl->y;
 }
 
 void ui_table_clear(struct ui_table *tbl)

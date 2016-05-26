@@ -45,6 +45,8 @@ struct ui_table {
 	int height;
 	int scroll_x;
 	const char *delim;
+
+	void (*data_bind)(struct ui_table *tbl, int col_id, const void *data);
 };
 
 struct ui_tab;
@@ -76,8 +78,13 @@ extern void ui_table_col_add(struct ui_table *tbl, uint32_t id, const char *name
 extern void ui_table_col_color_set(struct ui_table *tbl, int col_id, int color);
 extern void ui_table_col_align_set(struct ui_table *tbl, int col_id, enum ui_align align);
 extern void ui_table_col_delim_set(struct ui_table *tbl, const char *delim);
+extern void ui_table_data_bind_set(struct ui_table *tbl,
+				   void (*func)(struct ui_table *tbl,
+						int col_id, const void *data));
+extern void ui_table_data_bind(struct ui_table *tbl, int col_id, const void *data);
 
 extern void ui_table_row_add(struct ui_table *tbl);
+extern int ui_table_rows_count(const struct ui_table *tbl);
 extern void ui_table_row_show(struct ui_table *tbl);
 extern void ui_table_row_col_set(struct ui_table *tbl, uint32_t col_id,
 				 const char *str);

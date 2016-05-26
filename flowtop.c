@@ -970,7 +970,6 @@ static void print_flow_peer_info(const struct flow_entry *n, enum flow_direction
 	int country_color = COLOR(GREEN, BLACK);
 	int addr_color = dst_color;
 	int port_color = A_BOLD;
-	char tmp[128];
 
 	if (show_src && dir == FLOW_DIR_SRC) {
 		country_color  = src_color;
@@ -990,52 +989,22 @@ static void print_flow_peer_info(const struct flow_entry *n, enum flow_direction
 	ui_table_col_color_set(&flows_tbl, TBL_FLOW_BYTES, counters_color);
 	ui_table_col_color_set(&flows_tbl, TBL_FLOW_RATE, counters_color);
 
-	/* Reverse DNS/IP */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_ADDRESS,
-			      SELFLD(dir, rev_dns_src, rev_dns_dst));
-
-	/* Application port */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PORT,
-			      flow_port2str(n, tmp, sizeof(tmp), dir));
-
-	/* GEO */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_GEO,
-			      SELFLD(dir, country_code_src, country_code_dst));
-
-	/* Bytes */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_BYTES,
-			      bandw2str(SELFLD(dir, bytes_src, bytes_dst),
-					tmp, sizeof(tmp) - 1));
-
-	/* Rate bytes */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_RATE,
-			      rate2str(SELFLD(dir, rate_bytes_src, rate_bytes_dst),
-				       tmp, sizeof(tmp) - 1));
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_ADDRESS, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_PORT, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_GEO, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_BYTES, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_RATE, n);
 }
 
 static void draw_flow_entry(const struct flow_entry *n)
 {
-	char tmp[128];
-
 	ui_table_row_add(&flows_tbl);
 
-	/* Application */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PROCESS,
-			      n->proc ?  n->proc->name : "");
-
-	/* PID */
-	slprintf(tmp, sizeof(tmp), "%.d", n->proc ? n->proc->pid : 0);
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PID, tmp);
-
-	/* L4 protocol */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_PROTO, l4proto2str[n->l4_proto]);
-
-	/* L4 protocol state */
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_STATE, flow_state2str(n));
-
-	/* Time */
-	time2str(n->timestamp_start, tmp, sizeof(tmp));
-	ui_table_row_col_set(&flows_tbl, TBL_FLOW_TIME, tmp);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_PROCESS, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_PID, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_PROTO, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_STATE, n);
+	ui_table_data_bind(&flows_tbl, TBL_FLOW_TIME, n);
 
 	print_flow_peer_info(n, show_src ? FLOW_DIR_SRC : FLOW_DIR_DST);
 
@@ -1355,6 +1324,68 @@ static void show_option_toggle(int opt)
 	}
 }
 
+static void flows_data_bind(struct ui_table *tbl, int col_id, const void *data)
+{
+	enum flow_direction dir = FLOW_DIR_DST;
+	const struct flow_entry *n;
+	int rows_count;
+	char tmp[128];
+
+	if (!data)
+		return;
+
+	rows_count = ui_table_rows_count(tbl);
+	if (show_src)
+		dir = rows_count % 2 == 0 ? FLOW_DIR_DST : FLOW_DIR_SRC;
+
+	n = (struct flow_entry *)data;
+
+	switch (col_id) {
+	case TBL_FLOW_PROCESS:
+		if (n->proc)
+			ui_table_row_col_set(tbl, col_id, n->proc->name);
+		break;
+	case TBL_FLOW_PID:
+		if (n->proc) {
+			slprintf(tmp, sizeof(tmp), "%.d", n->proc->pid);
+			ui_table_row_col_set(tbl, col_id, tmp);
+		}
+		break;
+	case TBL_FLOW_PROTO:
+		ui_table_row_col_set(tbl, col_id, l4proto2str[n->l4_proto]);
+		break;
+	case TBL_FLOW_STATE:
+		ui_table_row_col_set(tbl, col_id, flow_state2str(n));
+		break;
+	case TBL_FLOW_TIME:
+		time2str(n->timestamp_start, tmp, sizeof(tmp));
+		ui_table_row_col_set(tbl, col_id, tmp);
+		break;
+	case TBL_FLOW_ADDRESS:
+		ui_table_row_col_set(tbl, col_id,
+				SELFLD(dir, rev_dns_src, rev_dns_dst));
+		break;
+	case TBL_FLOW_PORT:
+		ui_table_row_col_set(tbl, col_id,
+				flow_port2str(n, tmp, sizeof(tmp), dir));
+		break;
+	case TBL_FLOW_GEO:
+		ui_table_row_col_set(tbl, col_id,
+				SELFLD(dir, country_code_src, country_code_dst));
+		break;
+	case TBL_FLOW_BYTES:
+		ui_table_row_col_set(tbl, col_id,
+				bandw2str(SELFLD(dir, bytes_src, bytes_dst),
+					tmp, sizeof(tmp) - 1));
+		break;
+	case TBL_FLOW_RATE:
+		ui_table_row_col_set(tbl, col_id,
+				rate2str(SELFLD(dir, rate_bytes_src, rate_bytes_dst),
+					tmp, sizeof(tmp) - 1));
+		break;
+	}
+}
+
 static void flows_table_init(struct ui_table *tbl)
 {
 	ui_table_init(tbl);
@@ -1382,6 +1413,8 @@ static void flows_table_init(struct ui_table *tbl)
 	ui_table_col_color_set(tbl, TBL_FLOW_STATE, COLOR(YELLOW, BLACK));
 
 	ui_table_header_color_set(&flows_tbl, COLOR(BLACK, GREEN));
+
+	ui_table_data_bind_set(&flows_tbl, flows_data_bind);
 }
 
 static void procs_table_init(struct ui_table *tbl)
