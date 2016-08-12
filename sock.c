@@ -1,9 +1,17 @@
+#include "config.h"
+
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#ifdef HAVE_HARDWARE_TIMESTAMPING
+#include <linux/net_tstamp.h>
+#endif
 #include <linux/if_ether.h>
+#include <linux/sockios.h>
 #include <linux/tcp.h>
+#include <linux/if.h>
 
 #include "sock.h"
 #include "die.h"
@@ -195,4 +203,35 @@ void reset_system_socket_memory(int *vals, size_t len)
 	set_system_socket_mem(sock_rmem_def, vals[1]);
 	set_system_socket_mem(sock_wmem_max, vals[2]);
 	set_system_socket_mem(sock_wmem_def, vals[3]);
+}
+
+int set_sockopt_hwtimestamp(int sock, const char *dev)
+{
+#ifdef HAVE_HARDWARE_TIMESTAMPING
+	int timesource, ret;
+	struct hwtstamp_config hwconfig;
+	struct ifreq ifr;
+
+	if (!strncmp("any", dev, strlen("any")))
+		return -1;
+
+	memset(&hwconfig, 0, sizeof(hwconfig));
+	hwconfig.tx_type = HWTSTAMP_TX_OFF;
+	hwconfig.rx_filter = HWTSTAMP_FILTER_ALL;
+
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, dev, sizeof(ifr.ifr_name));
+	ifr.ifr_data = &hwconfig;
+
+	ret = ioctl(sock, SIOCSHWTSTAMP, &ifr);
+	if (ret < 0)
+		return -1;
+
+	timesource = SOF_TIMESTAMPING_RAW_HARDWARE;
+
+	return setsockopt(sock, SOL_PACKET, PACKET_TIMESTAMP, &timesource,
+			  sizeof(timesource));
+#else
+	return -1;
+#endif
 }

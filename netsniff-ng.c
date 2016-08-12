@@ -44,7 +44,6 @@
 #include "lockme.h"
 #include "tprintf.h"
 #include "timer.h"
-#include "tstamping.h"
 #include "dissector.h"
 #include "xmalloc.h"
 

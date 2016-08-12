@@ -74,9 +74,6 @@ endif
 ifeq ($(CONFIG_GEOIP), 1)
 netsniff-ng-objs +=	geoip.o
 endif
-ifeq ($(CONFIG_HWTSTAMP), 1)
-netsniff-ng-objs +=	tstamping.o
-endif
 ifeq ($(CONFIG_LIBNL), 1)
 netsniff-ng-objs +=	mac80211.o \
 			proto_nlmsg.o

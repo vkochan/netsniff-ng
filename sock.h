@@ -15,5 +15,6 @@ extern int set_ipv6_only(int fd);
 extern void set_mtu_disc_dont(int fd);
 extern void set_system_socket_memory(int *vals, size_t len);
 extern void reset_system_socket_memory(int *vals, size_t len);
+extern int set_sockopt_hwtimestamp(int sock, const char *dev);
 
 #endif /* SOCK_H */
