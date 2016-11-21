@@ -196,13 +196,13 @@ static void alloc_rx_ring_frames(int sock, struct ring *ring)
 
 static void join_fanout_group(int sock, uint32_t fanout_group, uint32_t fanout_type)
 {
+#if defined(PACKET_FANOUT)
 	uint32_t fanout_opt = 0;
 	int ret;
 
 	if (fanout_group == 0)
 		return;
 
-#if defined(PACKET_FANOUT)
 	fanout_opt = (fanout_group & 0xffff) | (fanout_type << 16);
 
 	ret = setsockopt(sock, SOL_PACKET, PACKET_FANOUT, &fanout_opt,
