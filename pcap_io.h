@@ -373,6 +373,59 @@ static inline void pcap_set_length(pcap_pkthdr_t *phdr, enum pcap_type type, u32
 	}
 }
 
+static inline void pcap_get_tstamp(pcap_pkthdr_t *phdr, enum pcap_type type,
+				   struct timeval *tv)
+{
+	switch (type) {
+	case DEFAULT:
+	case DEFAULT_LL:
+		tv->tv_sec = phdr->ppo.ts.tv_sec;
+		tv->tv_usec = phdr->ppo.ts.tv_usec;
+		break;
+
+	case DEFAULT_SWAPPED:
+	case DEFAULT_LL_SWAPPED:
+		tv->tv_sec = ___constant_swab32(phdr->ppo.ts.tv_sec);
+		tv->tv_usec = ___constant_swab32(phdr->ppo.ts.tv_usec);
+		break;
+
+	case NSEC:
+	case NSEC_LL:
+		tv->tv_sec = phdr->ppn.ts.tv_sec;
+		tv->tv_usec = phdr->ppn.ts.tv_nsec / 1000;
+		break;
+
+	case NSEC_SWAPPED:
+	case NSEC_LL_SWAPPED:
+		tv->tv_sec = ___constant_swab32(phdr->ppn.ts.tv_sec);
+		tv->tv_usec = ___constant_swab32(phdr->ppn.ts.tv_nsec) / 1000;
+		break;
+
+	case KUZNETZOV:
+		tv->tv_sec = phdr->ppk.ts.tv_sec;
+		tv->tv_usec = phdr->ppk.ts.tv_usec;
+		break;
+
+	case KUZNETZOV_SWAPPED:
+		tv->tv_sec = ___constant_swab32(phdr->ppk.ts.tv_sec);
+		tv->tv_usec = ___constant_swab32(phdr->ppk.ts.tv_usec);
+		break;
+
+	case BORKMANN:
+		tv->tv_sec = phdr->ppb.ts.tv_sec;
+		tv->tv_usec = phdr->ppb.ts.tv_nsec / 1000;
+		break;
+
+	case BORKMANN_SWAPPED:
+		tv->tv_sec = ___constant_swab32(phdr->ppb.ts.tv_sec);
+		tv->tv_usec = ___constant_swab32(phdr->ppb.ts.tv_nsec) / 1000;
+		break;
+
+	default:
+		bug();
+	}
+}
+
 static inline u32 pcap_get_hdr_length(pcap_pkthdr_t *phdr, enum pcap_type type)
 {
 	switch (type) {
