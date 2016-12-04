@@ -5,6 +5,8 @@
  * Subject to the GPL, version 2.
  */
 
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
@@ -16,7 +18,6 @@
 #include <sys/fsuid.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
 #include <net/ethernet.h>
@@ -55,6 +56,7 @@
 #include "ring_tx.h"
 #include "csum.h"
 #include "trafgen_proto.h"
+#include "pcap_io.h"
 
 #ifndef timeval_to_timespec
 #define timeval_to_timespec(tv, ts) {         \
@@ -67,12 +69,14 @@ enum shaper_type {
 	SHAPER_NONE,
 	SHAPER_PKTS,
 	SHAPER_BYTES,
+	SHAPER_TSTAMP,
 };
 
 struct shaper {
 	enum shaper_type type;
 	unsigned long long sent;
 	unsigned long long rate;
+	struct timeval tstamp;
 	struct timeval start;
 	struct timeval end;
 	struct timespec delay;
@@ -88,6 +92,7 @@ struct ctx {
 	struct sockaddr_in dest;
 	struct shaper sh;
 	char *packet_str;
+	char *pcap_in;
 };
 
 struct cpu_stats {
@@ -586,23 +591,48 @@ static void shaper_set_rate(struct shaper *sh, unsigned long long rate,
 	sh->type = type;
 }
 
-static void shaper_delay(struct shaper *sh, unsigned long pkt_len)
+static void shaper_set_tstamp(struct shaper *sh, struct timeval *tv)
 {
-	if (sh->type != SHAPER_NONE)
+	sh->tstamp.tv_sec = tv->tv_sec;
+	sh->tstamp.tv_usec = tv->tv_usec;
+}
+
+static void shaper_delay(struct shaper *sh, struct packet *pkt)
+{
+	if (sh->type == SHAPER_BYTES || sh->type == SHAPER_PKTS) {
+		unsigned long pkt_len = pkt->len;
+
 		sh->sent += sh->type == SHAPER_BYTES ? pkt_len : 1;
 
-	if (sh->sent >= sh->rate && sh->rate > 0) {
-		struct timeval delay_us;
-		struct timeval time_sent;
-		struct timeval time_1s = { .tv_sec = 1 };
+		if (sh->sent >= sh->rate && sh->rate > 0) {
+			struct timeval delay_us;
+			struct timeval time_sent;
+			struct timeval time_1s = { .tv_sec = 1 };
+
+			bug_on(gettimeofday(&sh->end, NULL));
+			timersub(&sh->end, &sh->start, &time_sent);
+
+			if (timercmp(&time_1s, &time_sent, > )) {
+				timersub(&time_1s, &time_sent, &delay_us);
+				timeval_to_timespec(&delay_us, &sh->delay);
+			}
+		}
+	} else if (sh->type == SHAPER_TSTAMP) {
+		struct timeval pkt_diff;
+		struct timeval diff;
 
 		bug_on(gettimeofday(&sh->end, NULL));
-		timersub(&sh->end, &sh->start, &time_sent);
+		timersub(&sh->end, &sh->start, &diff);
+		timersub(&pkt->tstamp, &sh->tstamp, &pkt_diff);
 
-		if (timercmp(&time_1s, &time_sent, > )) {
-			timersub(&time_1s, &time_sent, &delay_us);
-			timeval_to_timespec(&delay_us, &sh->delay);
+		if (timercmp(&diff, &pkt_diff, <)) {
+			struct timeval delay;
+
+			timersub(&pkt_diff, &diff, &delay);
+			timeval_to_timespec(&delay, &sh->delay);
 		}
+
+		memcpy(&sh->tstamp, &pkt->tstamp, sizeof(sh->tstamp));
 	}
 
 	if ((sh->delay.tv_sec | sh->delay.tv_nsec) > 0) {
@@ -698,7 +728,7 @@ retry:
 			num--;
 
 		if (shaper_is_set(&ctx->sh))
-			shaper_delay(&ctx->sh, packets[i].len);
+			shaper_delay(&ctx->sh, &packets[i]);
 	}
 
 	bug_on(gettimeofday(&end, NULL));
@@ -910,16 +940,79 @@ static void xmit_packet_precheck(struct ctx *ctx, unsigned int cpu)
 	}
 }
 
+static void pcap_load_packets(const char *path)
+{
+	const struct pcap_file_ops *pcap_io = pcap_ops[PCAP_OPS_SG];
+	uint32_t link_type, magic;
+	pcap_pkthdr_t phdr;
+	size_t buf_len;
+	uint8_t *buf;
+	int ret;
+	int fd;
+
+	fd = open(path, O_RDONLY | O_LARGEFILE | O_NOATIME);
+	if (fd < 0 && errno == EPERM)
+		fd = open_or_die(path, O_RDONLY | O_LARGEFILE);
+	if (fd < 0)
+		panic("Cannot open file %s! %s.\n", path, strerror(errno));
+
+	if (pcap_io->init_once_pcap)
+		pcap_io->init_once_pcap(false);
+
+	ret = pcap_io->pull_fhdr_pcap(fd, &magic, &link_type);
+	if (ret)
+		panic("Error reading pcap header!\n");
+
+	if (pcap_io->prepare_access_pcap) {
+		ret = pcap_io->prepare_access_pcap(fd, PCAP_MODE_RD, false);
+		if (ret)
+			panic("Error prepare reading pcap!\n");
+	}
+
+	buf_len = round_up(1024 * 1024, RUNTIME_PAGE_SIZE);
+	buf = xmalloc_aligned(buf_len, CO_CACHE_LINE_SIZE);
+
+	while (pcap_io->read_pcap(fd, &phdr, magic, buf, buf_len) > 0) {
+		struct packet *pkt;
+		size_t pkt_len;
+
+		pkt_len = pcap_get_length(&phdr, magic);
+		if (!pkt_len)
+			continue;
+
+		realloc_packet();
+
+		pkt = current_packet();
+
+		pkt->len = pkt_len;
+		pkt->payload = xzmalloc(pkt_len);
+		memcpy(pkt->payload, buf, pkt_len);
+		pcap_get_tstamp(&phdr, magic, &pkt->tstamp);
+	}
+
+	if (pcap_io->prepare_close_pcap)
+		pcap_io->prepare_close_pcap(fd, PCAP_MODE_RD);
+
+	free(buf);
+	close(fd);
+}
+
 static void main_loop(struct ctx *ctx, char *confname, bool slow,
 		      unsigned int cpu, bool invoke_cpp, char **cpp_argv,
 		      unsigned long orig_num)
 {
-	if (ctx->packet_str)
-		compile_packets_str(ctx->packet_str, ctx->verbose, cpu);
-	else
-		compile_packets(confname, ctx->verbose, cpu, invoke_cpp, cpp_argv);
+	if (strstr(confname, ".pcap")) {
+		pcap_load_packets(confname);
+		shaper_set_tstamp(&ctx->sh, &packets[0].tstamp);
+		ctx->num = plen;
+	} else {
+		if (ctx->packet_str)
+			compile_packets_str(ctx->packet_str, ctx->verbose, cpu);
+		else
+			compile_packets(confname, ctx->verbose, cpu, invoke_cpp, cpp_argv);
 
-	preprocess_packets();
+		preprocess_packets();
+	}
 
 	xmit_packet_precheck(ctx, cpu);
 
@@ -1061,9 +1154,13 @@ int main(int argc, char **argv)
 		case 'J':
 			ctx.jumbo_support = true;
 			break;
-		case 'c':
 		case 'i':
 			confname = xstrdup(optarg);
+			if (strstr(confname, ".pcap")) {
+				ctx.sh.type = SHAPER_TSTAMP;
+				break;
+			}
+		case 'c':
 			if (!strncmp("-", confname, strlen("-")))
 				ctx.cpus = 1;
 			break;

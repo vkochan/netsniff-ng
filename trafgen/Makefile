@@ -21,6 +21,8 @@ trafgen-objs =	xmalloc.o \
 		timer.o \
 		sysctl.o \
 		cpp.o \
+		pcap_sg.o \
+		iosched.o \
 		trafgen_proto.o \
 		trafgen_l2.o \
 		trafgen_l3.o \
