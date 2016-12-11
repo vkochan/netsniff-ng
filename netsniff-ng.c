@@ -616,49 +616,26 @@ static void translate_pcap_to_txf(int fdo, uint8_t *out, size_t len)
 
 static void read_pcap(struct ctx *ctx)
 {
-	uint8_t *out;
-	int ret, fd, fdo = 0;
-	unsigned long trunced = 0;
-	size_t out_len;
-	pcap_pkthdr_t phdr;
+	int ret, fdo = 0;
 	struct sock_fprog bpf_ops;
 	struct frame_map fm;
 	struct timeval start, end, diff;
 	bool is_out_pcap = ctx->device_out && strstr(ctx->device_out, ".pcap");
-	const struct pcap_file_ops *pcap_out_ops = pcap_ops[PCAP_OPS_RW];
+	struct pcap_io pcap_out;
+	struct pcap_io pcap_in;
+	struct pcap_packet *pkt;
 
 	bug_on(!__pcap_io);
 
-	if (!strncmp("-", ctx->device_in, strlen("-"))) {
-		fd = dup_or_die(fileno(stdin));
-		close(fileno(stdin));
-		if (ctx->pcap == PCAP_OPS_MM)
-			ctx->pcap = PCAP_OPS_SG;
-	} else {
-		/* O_NOATIME requires privileges, in case we don't have
-		 * them, retry without them at a minor cost of updating
-		 * atime in case the fs has been mounted as such.
-		 */
-		fd = open(ctx->device_in, O_RDONLY | O_LARGEFILE | O_NOATIME);
-		if (fd < 0 && errno == EPERM)
-			fd = open_or_die(ctx->device_in, O_RDONLY | O_LARGEFILE);
-		if (fd < 0)
-			panic("Cannot open file %s! %s.\n", ctx->device_in,
-			      strerror(errno));
-	}
+	pcap_io_init(&pcap_in, ctx->pcap);
+	pcap_io_enforce_prio_set(&pcap_in, ctx->enforce);
+	pcap_io_open(&pcap_in, ctx->device_in, PCAP_MODE_RD);
+	pcap_io_header_read(&pcap_in);
 
-	if (__pcap_io->init_once_pcap)
-		__pcap_io->init_once_pcap(false);
+	pkt = pcap_packet_alloc(&pcap_in);
+	pcap_packet_buf_alloc(pkt, round_up(1024 * 1024, RUNTIME_PAGE_SIZE));
 
-	ret = __pcap_io->pull_fhdr_pcap(fd, &ctx->magic, &ctx->link_type);
-	if (ret)
-		panic("Error reading pcap header!\n");
-
-	if (__pcap_io->prepare_access_pcap) {
-		ret = __pcap_io->prepare_access_pcap(fd, PCAP_MODE_RD, ctx->jumbo);
-		if (ret)
-			panic("Error prepare reading pcap!\n");
-	}
+	ctx->link_type = pcap_io_link_type_get(&pcap_in);
 
 	fmemset(&fm, 0, sizeof(fm));
 
@@ -666,26 +643,23 @@ static void read_pcap(struct ctx *ctx)
 	if (ctx->dump_bpf)
 		bpf_dump_all(&bpf_ops);
 
-	dissector_init_all(ctx->print_mode);
+	pcap_io_bpf_apply(&pcap_in, &bpf_ops);
 
-	out_len = round_up(1024 * 1024, RUNTIME_PAGE_SIZE);
-	out = xmalloc_aligned(out_len, CO_CACHE_LINE_SIZE);
+	dissector_init_all(ctx->print_mode);
 
 	if (ctx->device_out) {
 		if (!strncmp("-", ctx->device_out, strlen("-"))) {
 			fdo = dup_or_die(fileno(stdout));
 			close(fileno(stdout));
-		} else {
-			fdo = open_or_die_m(ctx->device_out, O_RDWR | O_CREAT |
-					    O_TRUNC | O_LARGEFILE, DEFFILEMODE);
-		}
-	}
+		} else if (is_out_pcap) {
+			pcap_io_init(&pcap_out, PCAP_OPS_RW);
+			pcap_io_open(&pcap_out, ctx->device_out, PCAP_MODE_WR);
 
-	if (is_out_pcap) {
-		ret = pcap_out_ops->push_fhdr_pcap(fdo, ctx->magic,
-						   ctx->link_type);
-		if (ret)
-			panic("Error writing pcap header!\n");
+			pcap_io_header_copy(&pcap_out, &pcap_in);
+			ret = pcap_io_header_write(&pcap_out);
+			if (ret)
+				panic("Error writing pcap header!\n");
+		}
 	}
 
 	drop_privileges(ctx->enforce, ctx->uid, ctx->gid);
@@ -696,46 +670,34 @@ static void read_pcap(struct ctx *ctx)
 	bug_on(gettimeofday(&start, NULL));
 
 	while (likely(sigint == 0)) {
-		do {
-			ret = __pcap_io->read_pcap(fd, &phdr, ctx->magic,
-						   out, out_len);
-			if (unlikely(ret < 0))
-				goto out;
+		uint8_t *pkt_buf;
 
-			if (unlikely(pcap_get_length(&phdr, ctx->magic) == 0)) {
-				trunced++;
-				continue;
-			}
+		ret = pcap_io_packet_read(&pcap_in, pkt);
+		if (unlikely(!ret)) {
+			goto out;
+		}
 
-			if (unlikely(pcap_get_length(&phdr, ctx->magic) > out_len)) {
-				pcap_set_length(&phdr, ctx->magic, out_len);
-				trunced++;
-			}
-		} while (ctx->filter &&
-			 !bpf_run_filter(&bpf_ops, out,
-					 pcap_get_length(&phdr, ctx->magic)));
-
-		pcap_pkthdr_to_tpacket_hdr(&phdr, ctx->magic, &fm.tp_h, &fm.s_ll);
+		pcap_packet_to_tpacket2(pkt, &fm.tp_h, &fm.s_ll);
 
 		ctx->tx_bytes += fm.tp_h.tp_len;
 		ctx->tx_packets++;
 
-		show_frame_hdr(out, fm.tp_h.tp_snaplen, ctx->link_type, &fm,
+		pkt_buf = pcap_packet_buf_get(pkt);
+
+		show_frame_hdr(pkt_buf, fm.tp_h.tp_snaplen, ctx->link_type, &fm,
 			       ctx->print_mode, ctx->tx_packets);
 
-		dissector_entry_point(out, fm.tp_h.tp_snaplen,
+		dissector_entry_point(pkt_buf, fm.tp_h.tp_snaplen,
 				      ctx->link_type, ctx->print_mode,
 				      &fm.s_ll);
 
 		if (is_out_pcap) {
-			size_t pcap_len = pcap_get_length(&phdr, ctx->magic);
-			int wlen = pcap_out_ops->write_pcap(fdo, &phdr,
-							    ctx->magic, out,
-							    pcap_len);
-			if (unlikely(wlen != (int)pcap_get_total_length(&phdr, ctx->magic)))
+			ret = pcap_io_packet_write(&pcap_out, pkt);
+			if (unlikely(ret))
 				panic("Error writing to pcap!\n");
+
 		} else if (ctx->device_out) {
-			translate_pcap_to_txf(fdo, out, fm.tp_h.tp_snaplen);
+			translate_pcap_to_txf(fdo, pkt_buf, fm.tp_h.tp_snaplen);
 		}
 
 		if (frame_count_max != 0) {
@@ -754,26 +716,23 @@ out:
 
 	dissector_cleanup_all();
 
-	if (__pcap_io->prepare_close_pcap)
-		__pcap_io->prepare_close_pcap(fd, PCAP_MODE_RD);
-
-	xfree(out);
+	pcap_io_close(&pcap_in);
+	pcap_packet_free(pkt);
 
 	fflush(stdout);
 	printf("\n");
 	printf("\r%12lu packets outgoing\n", ctx->tx_packets);
-	printf("\r%12lu packets truncated in file\n", trunced);
+	printf("\r%12lu packets truncated in file\n", pcap_io_truncated_get(&pcap_in));
 	printf("\r%12lu bytes outgoing\n", ctx->tx_bytes);
 	printf("\r%12lu sec, %lu usec in total\n", diff.tv_sec, diff.tv_usec);
 
-	if (!strncmp("-", ctx->device_in, strlen("-")))
-		dup2(fd, fileno(stdin));
-	close(fd);
-
 	if (ctx->device_out) {
-		if (!strncmp("-", ctx->device_out, strlen("-")))
+		if (is_out_pcap) {
+			pcap_io_close(&pcap_out);
+		} else if (!strncmp("-", ctx->device_out, strlen("-"))) {
 			dup2(fdo, fileno(stdout));
-		close(fdo);
+			close(fdo);
+		}
 	}
 }
 

@@ -59,6 +59,7 @@ netsniff-ng-objs =	dissector.o \
 			pcap_rw.o \
 			pcap_sg.o \
 			pcap_mm.o \
+			pcap_io.o \
 			ring_rx.o \
 			ring_tx.o \
 			ring.o \
