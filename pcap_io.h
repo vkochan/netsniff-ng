@@ -17,6 +17,7 @@
 #include <linux/if.h>
 #include <linux/if_packet.h>
 #include <linux/if_arp.h>
+#include <linux/filter.h>
 
 #include "built_in.h"
 #include "die.h"
@@ -162,6 +163,31 @@ struct pcap_file_ops {
 			     uint8_t *packet, size_t len);
 	void (*prepare_close_pcap)(int fd, enum pcap_mode mode);
 	void (*fsync_pcap)(int fd);
+};
+
+struct pcap_io {
+	uint32_t link_type;
+	uint32_t magic;
+
+	const struct pcap_file_ops *ops;
+	enum pcap_ops_groups ops_type;
+	enum pcap_type type;
+	enum pcap_mode mode;
+	const char *path;
+	bool enforce_prio;
+	bool jumbo;
+	int fd;
+
+	struct sock_fprog *bpf_ops;
+	uint64_t truncated;
+};
+
+struct pcap_packet {
+	pcap_pkthdr_t phdr;
+	struct pcap_io *io;
+	bool is_buf_alloc;
+	uint32_t buf_len;
+	uint8_t *buf;
 };
 
 extern const struct pcap_file_ops pcap_rw_ops __maybe_unused;
@@ -895,5 +921,122 @@ static int pcap_generic_push_fhdr(int fd, uint32_t magic, uint32_t linktype)
 
 	return 0;
 }
+
+extern void pcap_io_init(struct pcap_io *io, enum pcap_ops_groups ops_type);
+extern void pcap_io_open(struct pcap_io *io, const char *path, enum pcap_mode mode);
+extern void pcap_io_header_copy(struct pcap_io *to, struct pcap_io *from);
+extern int pcap_io_header_read(struct pcap_io *io);
+extern int pcap_io_header_write(struct pcap_io *io);
+extern int pcap_io_packet_read(struct pcap_io *io, struct pcap_packet *pk);
+extern int pcap_io_packet_write(struct pcap_io *io, struct pcap_packet *pkt);
+extern void pcap_io_close(struct pcap_io *io);
+
+extern struct pcap_packet *pcap_packet_alloc(struct pcap_io *io);
+extern void pcap_packet_free(struct pcap_packet *pkt);
+extern void pcap_packet_buf_alloc(struct pcap_packet *pkt, uint32_t len);
+
+static inline uint32_t pcap_packet_len_get(struct pcap_packet *pkt)
+{
+	return pcap_get_length(&pkt->phdr, pkt->io->magic);
+}
+
+static inline void pcap_packet_len_set(struct pcap_packet *pkt, uint32_t len)
+{
+	pcap_set_length(&pkt->phdr, pkt->io->magic, len);
+}
+
+static inline uint32_t pcap_io_pcap_type_get(struct pcap_io *io)
+{
+	return io->magic;
+}
+
+static inline void pcap_io_pcap_type_set(struct pcap_io *io, uint32_t type)
+{
+	io->magic = type;
+}
+
+static inline uint32_t pcap_io_link_type_get(struct pcap_io *io)
+{
+	return io->link_type;
+}
+
+static inline void pcap_io_link_type_set(struct pcap_io *io, uint32_t link_type)
+{
+	io->link_type = link_type;
+}
+
+static inline void pcap_io_enforce_prio_set(struct pcap_io *io, bool enforce)
+{
+	io->enforce_prio = enforce;
+}
+
+static inline void pcap_io_jumbo_enable_set(struct pcap_io *io, bool jumbo)
+{
+	io->jumbo = jumbo;
+}
+
+static inline void pcap_io_bpf_apply(struct pcap_io *io, struct sock_fprog *bpf)
+{
+	io->bpf_ops = bpf;
+}
+
+static inline uint64_t pcap_io_truncated_get(struct pcap_io *io)
+{
+	return io->truncated;
+}
+
+static inline void pcap_packet_buf_set(struct pcap_packet *pkt, uint8_t *buf)
+{
+	pkt->buf = buf;
+}
+
+static inline uint8_t *pcap_packet_buf_get(struct pcap_packet *pkt)
+{
+	return pkt->buf;
+}
+
+static inline void pcap_packet_buf_len_set(struct pcap_packet *pkt, uint32_t len)
+{
+	pkt->buf_len = len;
+}
+
+static inline uint32_t pcap_packet_buf_len_get(struct pcap_packet *pkt)
+{
+	return pkt->buf_len;
+}
+
+static inline uint8_t *pcap_packet_payload_get(struct pcap_packet *pkt)
+{
+	return pkt->buf;
+}
+
+static inline pcap_pkthdr_t *pcap_packet_header_get(struct pcap_packet *pkt)
+{
+	return &pkt->phdr;
+}
+
+static inline void pcap_packet_to_tpacket2(struct pcap_packet *pkt,
+					   struct tpacket2_hdr *thdr,
+					   struct sockaddr_ll *sll)
+{
+	pcap_pkthdr_to_tpacket_hdr(&pkt->phdr, pkt->io->magic, thdr, sll);
+}
+
+static inline void pcap_packet_from_tpacket2(struct pcap_packet *pkt,
+					     struct tpacket2_hdr *thdr,
+					     struct sockaddr_ll *sll)
+{
+	tpacket_hdr_to_pcap_pkthdr(thdr, sll, &pkt->phdr, pkt->io->magic);
+}
+
+#ifdef HAVE_TPACKET3
+static inline void pcap_packet_from_tpacket3(struct pcap_packet *pkt,
+					     struct tpacket3_hdr *thdr,
+					     struct sockaddr_ll *sll)
+
+{
+	tpacket3_hdr_to_pcap_pkthdr(thdr, sll, &pkt->phdr, pkt->io->magic);
+}
+#endif
 
 #endif /* PCAP_IO_H */
