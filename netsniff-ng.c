@@ -250,15 +250,15 @@ static void dump_rx_stats(struct ctx *ctx, int sock, bool is_v3)
 static void pcap_to_xmit(struct ctx *ctx)
 {
 	uint8_t *out = NULL;
-	int ifindex, fd = 0, ret;
+	int ifindex, ret;
 	size_t size;
 	unsigned int it = 0;
-	unsigned long trunced = 0;
 	struct ring tx_ring;
 	struct frame_map *hdr;
 	struct sock_fprog bpf_ops;
 	struct timeval start, end, diff;
-	pcap_pkthdr_t phdr;
+	struct pcap_io pcap_in;
+	struct pcap_packet *pkt;
 
 	if (!device_up_and_running(ctx->device_out) && !ctx->rfraw)
 		panic("Device not up and running!\n");
@@ -267,27 +267,11 @@ static void pcap_to_xmit(struct ctx *ctx)
 
 	tx_sock = pf_socket();
 
-	if (!strncmp("-", ctx->device_in, strlen("-"))) {
-		fd = dup_or_die(fileno(stdin));
-		close(fileno(stdin));
-		if (ctx->pcap == PCAP_OPS_MM)
-			ctx->pcap = PCAP_OPS_SG;
-	} else {
-		fd = open_or_die(ctx->device_in, O_RDONLY | O_LARGEFILE | O_NOATIME);
-	}
+	pcap_io_init(&pcap_in, ctx->pcap);
+	pcap_io_open(&pcap_in, ctx->device_in, PCAP_MODE_RD);
+	pcap_io_header_read(&pcap_in);
 
-	if (__pcap_io->init_once_pcap)
-		__pcap_io->init_once_pcap(true);
-
-	ret = __pcap_io->pull_fhdr_pcap(fd, &ctx->magic, &ctx->link_type);
-	if (ret)
-		panic("Error reading pcap header!\n");
-
-	if (__pcap_io->prepare_access_pcap) {
-		ret = __pcap_io->prepare_access_pcap(fd, PCAP_MODE_RD, ctx->jumbo);
-		if (ret)
-			panic("Error prepare reading pcap!\n");
-	}
+	ctx->link_type = pcap_io_link_type_get(&pcap_in);
 
 	if (ctx->rfraw) {
 		setup_rfmon_mac80211_dev(ctx, &ctx->device_out);
@@ -304,7 +288,12 @@ static void pcap_to_xmit(struct ctx *ctx)
 	if (ctx->dump_bpf)
 		bpf_dump_all(&bpf_ops);
 
+	pcap_io_bpf_apply(&pcap_in, &bpf_ops);
+
 	ring_tx_setup(&tx_ring, tx_sock, size, ifindex, ctx->jumbo, ctx->verbose);
+
+	pkt = pcap_packet_alloc(&pcap_in);
+	pcap_packet_buf_len_set(pkt, ring_frame_size(&tx_ring));
 
 	dissector_init_all(ctx->print_mode);
 
@@ -335,23 +324,13 @@ static void pcap_to_xmit(struct ctx *ctx)
 			hdr = tx_ring.frames[it].iov_base;
 			out = ((uint8_t *) hdr) + TPACKET2_HDRLEN - sizeof(struct sockaddr_ll);
 
-			do {
-				ret = __pcap_io->read_pcap(fd, &phdr, ctx->magic, out,
-							   ring_frame_size(&tx_ring));
-				if (unlikely(ret <= 0))
-					goto out;
+			pcap_packet_buf_set(pkt, out);
 
-				if (ring_frame_size(&tx_ring) <
-				    pcap_get_length(&phdr, ctx->magic)) {
-					pcap_set_length(&phdr, ctx->magic,
-							ring_frame_size(&tx_ring));
-					trunced++;
-				}
-			} while (ctx->filter &&
-				 !bpf_run_filter(&bpf_ops, out,
-						 pcap_get_length(&phdr, ctx->magic)));
+			ret = pcap_io_packet_read(&pcap_in, pkt);
+			if (unlikely(!ret))
+				goto out;
 
-			pcap_pkthdr_to_tpacket_hdr(&phdr, ctx->magic, &hdr->tp_h, NULL);
+			pcap_packet_to_tpacket2(pkt, &hdr->tp_h, NULL);
 
 			ctx->tx_bytes += hdr->tp_h.tp_len;;
 			ctx->tx_packets++;
@@ -396,19 +375,14 @@ out:
 	if (ctx->rfraw)
 		leave_rfmon_mac80211(ctx->device_out);
 
-	if (__pcap_io->prepare_close_pcap)
-		__pcap_io->prepare_close_pcap(fd, PCAP_MODE_RD);
-
-	if (!strncmp("-", ctx->device_in, strlen("-")))
-		dup2(fd, fileno(stdin));
-	close(fd);
+	pcap_io_close(&pcap_in);
 
 	close(tx_sock);
 
 	fflush(stdout);
 	printf("\n");
 	printf("\r%12lu packets outgoing\n", ctx->tx_packets);
-	printf("\r%12lu packets truncated in file\n", trunced);
+	printf("\r%12lu packets truncated in file\n", pcap_io_truncated_get(&pcap_in));
 	printf("\r%12lu bytes outgoing\n", ctx->tx_bytes);
 	printf("\r%12lu sec, %lu usec in total\n", diff.tv_sec, diff.tv_usec);
 }
