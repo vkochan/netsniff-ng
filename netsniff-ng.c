@@ -736,31 +736,21 @@ out:
 	}
 }
 
-static void finish_multi_pcap_file(struct ctx *ctx, int fd)
+static void finish_multi_pcap_file(struct pcap_io *io)
 {
-	__pcap_io->fsync_pcap(fd);
-
-	if (__pcap_io->prepare_close_pcap)
-		__pcap_io->prepare_close_pcap(fd, PCAP_MODE_WR);
-
-	close(fd);
+	pcap_io_close(io);
 
 	fmemset(&itimer, 0, sizeof(itimer));
 	setitimer(ITIMER_REAL, &itimer, NULL);
 }
 
-static int next_multi_pcap_file(struct ctx *ctx, int fd)
+static void next_multi_pcap_file(struct ctx *ctx, struct pcap_io *io)
 {
 	int ret;
 	char fname[512];
 	time_t ftime;
 
-	__pcap_io->fsync_pcap(fd);
-
-	if (__pcap_io->prepare_close_pcap)
-		__pcap_io->prepare_close_pcap(fd, PCAP_MODE_WR);
-
-	close(fd);
+	pcap_io_close(io);
 
 	if (sighup_time > 0) {
 		ftime = (time_t)(start_time + sighup_time);
@@ -771,20 +761,11 @@ static int next_multi_pcap_file(struct ctx *ctx, int fd)
 	slprintf(fname, sizeof(fname), "%s/%s%lu.pcap", ctx->device_out,
 		 ctx->prefix ? : "dump-", ftime);
 
-	fd = open_or_die_m(fname, O_RDWR | O_CREAT | O_TRUNC |
-			   O_LARGEFILE, DEFFILEMODE);
+	pcap_io_open(io, fname, PCAP_MODE_WR);
 
-	ret = __pcap_io->push_fhdr_pcap(fd, ctx->magic, ctx->link_type);
+	ret = pcap_io_header_write(io);
 	if (ret)
-		panic("Error writing pcap header!\n");
-
-	if (__pcap_io->prepare_access_pcap) {
-		ret = __pcap_io->prepare_access_pcap(fd, PCAP_MODE_WR, true);
-		if (ret)
-			panic("Error prepare writing pcap!\n");
-	}
-
-	return fd;
+		panic("Error writing multi pcap header!\n");
 }
 
 static void reset_interval(struct ctx *ctx)
@@ -799,12 +780,12 @@ static void reset_interval(struct ctx *ctx)
 	}
 }
 
-static int begin_multi_pcap_file(struct ctx *ctx)
+static void begin_multi_pcap_file(struct ctx *ctx, struct pcap_io *io)
 {
-	int fd, ret;
 	char fname[256];
+	int ret;
 
-	bug_on(!__pcap_io);
+	bug_on(!io);
 
 	if (ctx->device_out[strlen(ctx->device_out) - 1] == '/')
 		ctx->device_out[strlen(ctx->device_out) - 1] = 0;
@@ -812,69 +793,35 @@ static int begin_multi_pcap_file(struct ctx *ctx)
 	slprintf(fname, sizeof(fname), "%s/%s%lu.pcap", ctx->device_out,
 		 ctx->prefix ? : "dump-", time(NULL));
 
-	fd = open_or_die_m(fname, O_RDWR | O_CREAT | O_TRUNC |
-			   O_LARGEFILE, DEFFILEMODE);
+	pcap_io_open(io, fname, PCAP_MODE_WR);
 
-	ret = __pcap_io->push_fhdr_pcap(fd, ctx->magic, ctx->link_type);
+	ret = pcap_io_header_write(io);
 	if (ret)
-		panic("Error writing pcap header!\n");
-
-	if (__pcap_io->prepare_access_pcap) {
-		ret = __pcap_io->prepare_access_pcap(fd, PCAP_MODE_WR, true);
-		if (ret)
-			panic("Error prepare writing pcap!\n");
-	}
+		panic("Error writing multi pcap header!\n");
 
 	reset_interval(ctx);
-
-	return fd;
 }
 
-static void finish_single_pcap_file(struct ctx *ctx, int fd)
+static void finish_single_pcap_file(struct pcap_io *io)
 {
-	__pcap_io->fsync_pcap(fd);
-
-	if (__pcap_io->prepare_close_pcap)
-		__pcap_io->prepare_close_pcap(fd, PCAP_MODE_WR);
-
-	if (strncmp("-", ctx->device_out, strlen("-")))
-		close(fd);
-	else
-		dup2(fd, fileno(stdout));
+	pcap_io_close(io);
 }
 
-static int begin_single_pcap_file(struct ctx *ctx)
+static void begin_single_pcap_file(struct ctx *ctx, struct pcap_io *io)
 {
-	int fd, ret;
+	int ret;
 
-	bug_on(!__pcap_io);
+	bug_on(!io);
 
-	if (!strncmp("-", ctx->device_out, strlen("-"))) {
-		fd = dup_or_die(fileno(stdout));
-		close(fileno(stdout));
-		if (ctx->pcap == PCAP_OPS_MM)
-			ctx->pcap = PCAP_OPS_SG;
-	} else {
-		fd = open_or_die_m(ctx->device_out,
-				   O_RDWR | O_CREAT | O_TRUNC |
-				   O_LARGEFILE, DEFFILEMODE);
-	}
+	pcap_io_open(io, ctx->device_out, PCAP_MODE_WR);
 
-	ret = __pcap_io->push_fhdr_pcap(fd, ctx->magic, ctx->link_type);
+	ret = pcap_io_header_write(io);
 	if (ret)
-		panic("Error writing pcap header!\n");
-
-	if (__pcap_io->prepare_access_pcap) {
-		ret = __pcap_io->prepare_access_pcap(fd, PCAP_MODE_WR, true);
-		if (ret)
-			panic("Error prepare writing pcap!\n");
-	}
-
-	return fd;
+		panic("Error writing multi pcap header!\n");
 }
 
 static void update_pcap_next_dump(struct ctx *ctx, unsigned long snaplen,
-				  int *fd, int sock, bool is_v3)
+				  struct pcap_io *io, int sock, bool is_v3)
 {
 	if (!dump_to_pcap(ctx))
 		return;
@@ -896,7 +843,7 @@ static void update_pcap_next_dump(struct ctx *ctx, unsigned long snaplen,
 	}
 
 	if (next_dump) {
-		*fd = next_multi_pcap_file(ctx, *fd);
+		next_multi_pcap_file(ctx, io);
 		next_dump = false;
 
 		if (update_rx_stats(ctx, sock, is_v3))
@@ -911,7 +858,7 @@ static void update_pcap_next_dump(struct ctx *ctx, unsigned long snaplen,
 
 #ifdef HAVE_TPACKET3
 static void walk_t3_block(struct block_desc *pbd, struct ctx *ctx,
-			  int sock, int *fd)
+			  int sock, struct pcap_packet *pkt)
 {
 	int num_pkts = pbd->h1.num_pkts, i;
 	struct tpacket3_hdr *hdr;
@@ -922,7 +869,6 @@ static void walk_t3_block(struct block_desc *pbd, struct ctx *ctx,
 
 	for (i = 0; i < num_pkts && likely(sigint == 0); ++i) {
 		uint8_t *packet = ((uint8_t *) hdr + hdr->tp_mac);
-		pcap_pkthdr_t phdr;
 
 		if (skip_packet(ctx, sll))
 			goto next;
@@ -932,12 +878,12 @@ static void walk_t3_block(struct block_desc *pbd, struct ctx *ctx,
 		if (dump_to_pcap(ctx)) {
 			int ret;
 
-			tpacket3_hdr_to_pcap_pkthdr(hdr, sll, &phdr, ctx->magic);
+			pcap_packet_from_tpacket3(pkt, hdr, sll);
+			pcap_packet_buf_set(pkt, packet);
 
-			ret = __pcap_io->write_pcap(*fd, &phdr, ctx->magic, packet,
-						    pcap_get_length(&phdr, ctx->magic));
-			if (unlikely(ret != (int) pcap_get_total_length(&phdr, ctx->magic)))
-				panic("Write error to pcap!\n");
+			ret = pcap_io_packet_write(pkt->io, pkt);
+			if (unlikely(ret))
+				panic("Error writing to pcap!\n");
 		}
 
 		__show_frame_hdr(packet, hdr->tp_snaplen, ctx->link_type, sll,
@@ -956,7 +902,7 @@ next:
 			}
 		}
 
-		update_pcap_next_dump(ctx, hdr->tp_snaplen, fd, sock, true);
+		update_pcap_next_dump(ctx, hdr->tp_snaplen, pkt->io, sock, true);
 	}
 }
 #endif /* HAVE_TPACKET3 */
@@ -964,7 +910,7 @@ next:
 static void recv_only_or_dump(struct ctx *ctx)
 {
 	short ifflags = 0;
-	int sock, ifindex, fd = 0, ret;
+	int sock, ifindex, ret;
 	size_t size;
 	unsigned int it = 0;
 	struct ring rx_ring;
@@ -972,6 +918,8 @@ static void recv_only_or_dump(struct ctx *ctx)
 	struct sock_fprog bpf_ops;
 	struct timeval start, end, diff;
 	bool is_v3 = is_defined(HAVE_TPACKET3);
+	struct pcap_io pcap_out;
+	struct pcap_packet *pkt = NULL;
 
 	sock = pf_socket_type(ctx->link_type);
 
@@ -1008,13 +956,17 @@ static void recv_only_or_dump(struct ctx *ctx)
 	if (ctx->promiscuous)
 		ifflags = device_enter_promiscuous_mode(ctx->device_in);
 
-	if (dump_to_pcap(ctx) && __pcap_io->init_once_pcap)
-		__pcap_io->init_once_pcap(true);
-
 	drop_privileges(ctx->enforce, ctx->uid, ctx->gid);
 
 	if (dump_to_pcap(ctx)) {
 		struct stat stats;
+
+		pcap_io_init(&pcap_out, ctx->pcap);
+		pcap_io_enforce_prio_set(&pcap_out, true);
+		pcap_io_pcap_type_set(&pcap_out, ctx->magic);
+		pcap_io_link_type_set(&pcap_out, ctx->link_type);
+
+		pkt = pcap_packet_alloc(&pcap_out);
 
 		ret = stat(ctx->device_out, &stats);
 		if (ret < 0)
@@ -1023,9 +975,9 @@ static void recv_only_or_dump(struct ctx *ctx)
 			ctx->dump_dir = S_ISDIR(stats.st_mode);
 
 		if (ctx->dump_dir)
-			fd = begin_multi_pcap_file(ctx);
+			begin_multi_pcap_file(ctx, &pcap_out);
 		else
-			fd = begin_single_pcap_file(ctx);
+			begin_single_pcap_file(ctx, &pcap_out);
 	}
 
 	printf("Running! Hang up with ^C!\n\n");
@@ -1038,7 +990,7 @@ static void recv_only_or_dump(struct ctx *ctx)
 		struct block_desc *pbd;
 
 		while (user_may_pull_from_rx_block((pbd = rx_ring.frames[it].iov_base))) {
-			walk_t3_block(pbd, ctx, sock, &fd);
+			walk_t3_block(pbd, ctx, sock, pkt);
 
 			kernel_may_pull_from_rx_block(pbd);
 			it = (it + 1) % rx_ring.layout3.tp_block_nr;
@@ -1064,12 +1016,12 @@ static void recv_only_or_dump(struct ctx *ctx)
 			}
 
 			if (dump_to_pcap(ctx)) {
-				tpacket_hdr_to_pcap_pkthdr(&hdr->tp_h, &hdr->s_ll, &phdr, ctx->magic);
+				pcap_packet_from_tpacket2(pkt, &hdr->tp_h, &hdr->s_ll); 
+				pcap_packet_buf_set(pkt, packet);
 
-				ret = __pcap_io->write_pcap(fd, &phdr, ctx->magic, packet,
-							    pcap_get_length(&phdr, ctx->magic));
-				if (unlikely(ret != (int) pcap_get_total_length(&phdr, ctx->magic)))
-					panic("Write error to pcap!\n");
+				ret = pcap_io_packet_write(&pcap_out, pkt);
+				if (unlikely(ret))
+					panic("Error writing to pcap!\n");
 			}
 
 			show_frame_hdr(packet, hdr->tp_h.tp_snaplen,
@@ -1094,7 +1046,7 @@ next:
 			if (unlikely(sigint == 1))
 				break;
 
-			update_pcap_next_dump(ctx, hdr->tp_h.tp_snaplen, &fd,
+			update_pcap_next_dump(ctx, hdr->tp_h.tp_snaplen, &pcap_out,
 					      sock, is_v3);
 		}
 #endif /* HAVE_TPACKET3 */
@@ -1125,9 +1077,11 @@ next:
 
 	if (dump_to_pcap(ctx)) {
 		if (ctx->dump_dir)
-			finish_multi_pcap_file(ctx, fd);
+			finish_multi_pcap_file(&pcap_out);
 		else
-			finish_single_pcap_file(ctx, fd);
+			finish_single_pcap_file(&pcap_out);
+
+		pcap_packet_free(pkt);
 	}
 
 	close(sock);
