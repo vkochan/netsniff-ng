@@ -51,6 +51,9 @@
 #endif
 
 struct flow_entry {
+	struct list_head entry;
+
+	bool is_removed;
 	uint32_t flow_id, use, status;
 	uint8_t  l3_proto, l4_proto;
 	uint32_t ip4_src_addr, ip4_dst_addr;
@@ -65,7 +68,6 @@ struct flow_entry {
 	char city_src[128], city_dst[128];
 	char rev_dns_src[256], rev_dns_dst[256];
 	char procname[256];
-	struct flow_entry *next;
 	int inode;
 	unsigned int procnum;
 	bool is_visible;
@@ -78,8 +80,7 @@ struct flow_entry {
 };
 
 struct flow_list {
-	struct flow_entry *head;
-	struct spinlock lock;
+	struct list_head head;
 };
 
 enum flow_direction {
@@ -362,8 +363,7 @@ static inline void flow_entry_xfree(struct flow_entry *n)
 
 static inline void flow_list_init(struct flow_list *fl)
 {
-	fl->head = NULL;
-	spinlock_init(&fl->lock);
+	INIT_LIST_HEAD(&fl->head);
 }
 
 static inline bool nfct_is_dns(const struct nf_conntrack *ct)
@@ -392,84 +392,43 @@ static void flow_list_new_entry(struct flow_list *fl, const struct nf_conntrack 
 	flow_entry_from_ct(n, ct);
 	flow_entry_get_extended(n);
 
-	rcu_assign_pointer(n->next, fl->head);
-	rcu_assign_pointer(fl->head, n);
+	list_add_rcu(&n->entry, &fl->head);
 
 	n->is_visible = true;
 }
 
-static struct flow_entry *flow_list_find_id(struct flow_list *fl,
-					    uint32_t id)
+static struct flow_entry *flow_list_find_id(struct flow_list *fl, uint32_t id)
 {
-	struct flow_entry *n = rcu_dereference(fl->head);
+	struct flow_entry *n;
 
-	while (n != NULL) {
+	list_for_each_entry_rcu(n, &fl->head, entry) {
 		if (n->flow_id == id)
 			return n;
 
-		n = rcu_dereference(n->next);
 	}
 
 	return NULL;
 }
 
-static struct flow_entry *flow_list_find_prev_id(const struct flow_list *fl,
-						 uint32_t id)
+static void flow_list_set_remove_entry(struct flow_list *fl,
+				       const struct nf_conntrack *ct)
 {
-	struct flow_entry *prev = rcu_dereference(fl->head), *next;
+	struct flow_entry *n;
 
-	if (prev->flow_id == id)
-		return NULL;
-
-	while ((next = rcu_dereference(prev->next)) != NULL) {
-		if (next->flow_id == id)
-			return prev;
-
-		prev = next;
-	}
-
-	return NULL;
-}
-
-static void flow_list_destroy_entry(struct flow_list *fl,
-				    const struct nf_conntrack *ct)
-{
-	struct flow_entry *n1, *n2;
-	uint32_t id = nfct_get_attr_u32(ct, ATTR_ID);
-
-	n1 = flow_list_find_id(fl, id);
-	if (n1) {
-		n2 = flow_list_find_prev_id(fl, id);
-		if (n2) {
-			rcu_assign_pointer(n2->next, n1->next);
-			n1->next = NULL;
-
-			flow_entry_xfree(n1);
-		} else {
-			struct flow_entry *next = fl->head->next;
-
-			flow_entry_xfree(fl->head);
-			fl->head = next;
-		}
-	}
+	n = flow_list_find_id(fl, nfct_get_attr_u32(ct, ATTR_ID));
+	if (n)
+		n->is_removed = true;
 }
 
 static void flow_list_destroy(struct flow_list *fl)
 {
-	struct flow_entry *n;
+	struct flow_entry *n, *tmp;
 
-	synchronize_rcu();
-	spinlock_lock(&flow_list.lock);
-
-	while (fl->head != NULL) {
-		n = rcu_dereference(fl->head->next);
-		fl->head->next = NULL;
-
-		flow_entry_xfree(fl->head);
-		rcu_assign_pointer(fl->head, n);
+	list_for_each_entry_safe(n, tmp, &fl->head, entry) {
+		list_del_rcu(&n->entry);
+		synchronize_rcu();
+		flow_entry_xfree(n);
 	}
-
-	spinlock_unlock(&flow_list.lock);
 }
 
 static void flow_entry_find_process(struct flow_entry *n)
@@ -1044,15 +1003,14 @@ static void draw_flows(WINDOW *screen, struct flow_list *fl,
 
 	rcu_read_lock();
 
-	n = rcu_dereference(fl->head);
-	if (!n)
+	if (list_empty(&fl->head))
 		mvwprintw(screen, line, 2, "(No sessions! "
 			  "Is netfilter running?)");
 
 	ui_table_clear(&flows_tbl);
 	ui_table_header_print(&flows_tbl);
 
-	for (; n; n = rcu_dereference(n->next)) {
+	list_for_each_entry_rcu(n, &fl->head, entry) {
 		if (!n->is_visible)
 			continue;
 		if (presenter_flow_wrong_state(n))
@@ -1415,9 +1373,6 @@ static int flow_event_cb(enum nf_conntrack_msg_type type,
 	if (sigint)
 		return NFCT_CB_STOP;
 
-	synchronize_rcu();
-	spinlock_lock(&flow_list.lock);
-
 	switch (type) {
 	case NFCT_T_NEW:
 		flow_list_new_entry(&flow_list, ct);
@@ -1426,13 +1381,11 @@ static int flow_event_cb(enum nf_conntrack_msg_type type,
 		flow_list_update_entry(&flow_list, ct);
 		break;
 	case NFCT_T_DESTROY:
-		flow_list_destroy_entry(&flow_list, ct);
+		flow_list_set_remove_entry(&flow_list, ct);
 		break;
 	default:
 		break;
 	}
-
-	spinlock_unlock(&flow_list.lock);
 
 	if (sigint)
 		return NFCT_CB_STOP;
@@ -1442,11 +1395,25 @@ static int flow_event_cb(enum nf_conntrack_msg_type type,
 
 static void collector_refresh_flows(struct nfct_handle *handle)
 {
-	struct flow_entry *n;
+	struct list_head remove_list;
+	struct flow_entry *n, *tmp;
 
-	n = rcu_dereference(flow_list.head);
-	for (; n; n = rcu_dereference(n->next))
+	INIT_LIST_HEAD(&remove_list);
+
+	list_for_each_entry_rcu(n, &flow_list.head, entry)
 		nfct_query(handle, NFCT_Q_GET, n->ct);
+
+	list_for_each_entry_safe(n, tmp, &flow_list.head, entry) {
+		if (n->is_removed) {
+			list_del_rcu(&n->entry);
+			list_add(&n->entry, &remove_list);
+		}
+	}
+
+	synchronize_rcu();
+
+	list_for_each_entry_safe(n, tmp, &remove_list, entry)
+		flow_entry_xfree(n);
 }
 
 static void collector_create_filter(struct nfct_handle *nfct)
@@ -1499,9 +1466,6 @@ static int flow_dump_cb(enum nf_conntrack_msg_type type __maybe_unused,
 
 	if (sigint)
 		return NFCT_CB_STOP;
-
-	synchronize_rcu();
-	spinlock_lock(&flow_list.lock);
 
 	if (!(what & ~(INCLUDE_IPV4 | INCLUDE_IPV6)))
 		goto check_addr;
@@ -1558,7 +1522,6 @@ check_addr:
 	flow_list_new_entry(&flow_list, ct);
 
 skip_flow:
-	spinlock_unlock(&flow_list.lock);
 	return NFCT_CB_CONTINUE;
 }
 
@@ -1646,7 +1609,6 @@ static void *collector(void *null __maybe_unused)
 	rcu_unregister_thread();
 
 	flow_list_destroy(&flow_list);
-	spinlock_destroy(&flow_list.lock);
 
 	nfct_close(ct_event);
 
