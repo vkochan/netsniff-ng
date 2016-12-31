@@ -41,6 +41,7 @@
 #include "screen.h"
 #include "proc.h"
 #include "sysctl.h"
+#include "dns_resolver.h"
 
 #ifndef NSEC_PER_SEC
 #define NSEC_PER_SEC 1000000000L
@@ -681,14 +682,41 @@ static void flow_entry_get_extended_geo(struct flow_entry *n,
 	}
 }
 
+static void flow_resolve(const struct hostent *he, void *ctx, enum flow_direction dir)
+{
+	uint32_t *flow_id = (uint32_t *) ctx;
+	struct flow_entry *n;
+
+	spinlock_lock(&flow_list.lock);
+
+	n = flow_list_find_id(&flow_list, *flow_id);
+	if (!n) {
+		spinlock_unlock(&flow_list.lock);
+		return;
+	}
+
+	strlcpy(SELFLD(dir, rev_dns_src, rev_dns_dst), he->h_name,
+			sizeof(n->rev_dns_src));
+
+	spinlock_unlock(&flow_list.lock);
+}
+
+static void flow_resolve_dns_src_cb(const struct hostent *he, void *ctx)
+{
+	flow_resolve(he, ctx, FLOW_DIR_SRC);
+}
+
+static void flow_resolve_dns_dst_cb(const struct hostent *he, void *ctx)
+{
+	flow_resolve(he, ctx, FLOW_DIR_DST);
+}
+
 static void flow_entry_get_extended_revdns(struct flow_entry *n,
 					   enum flow_direction dir)
 {
-	size_t sa_len;
 	struct sockaddr_in sa4;
 	struct sockaddr_in6 sa6;
-	struct sockaddr *sa;
-	struct hostent *hent;
+	void *sock_addr;
 
 	build_bug_on(sizeof(n->rev_dns_src) != sizeof(n->rev_dns_dst));
 
@@ -698,41 +726,34 @@ static void flow_entry_get_extended_revdns(struct flow_entry *n,
 
 	case AF_INET:
 		flow_entry_get_sain4_obj(n, dir, &sa4);
+		sock_addr = &sa4;
 
-		if (!resolve_dns) {
-			inet_ntop(AF_INET, &sa4.sin_addr,
-				  SELFLD(dir, rev_dns_src, rev_dns_dst),
-				  sizeof(n->rev_dns_src));
-			return;
-		}
+		inet_ntop(AF_INET, &sa4.sin_addr,
+			  SELFLD(dir, rev_dns_src, rev_dns_dst),
+				 sizeof(n->rev_dns_src));
 
-		sa = (struct sockaddr *) &sa4;
-		sa_len = sizeof(sa4);
-		hent = gethostbyaddr(&sa4.sin_addr, sizeof(sa4.sin_addr), AF_INET);
 		break;
 
 	case AF_INET6:
 		flow_entry_get_sain6_obj(n, dir, &sa6);
+		sock_addr = &sa6;
 
-		if (!resolve_dns) {
-			inet_ntop(AF_INET6, &sa6.sin6_addr,
-				  SELFLD(dir, rev_dns_src, rev_dns_dst),
-				  sizeof(n->rev_dns_src));
-			return;
-		}
+		inet_ntop(AF_INET6, &sa6.sin6_addr,
+			  SELFLD(dir, rev_dns_src, rev_dns_dst),
+			  	 sizeof(n->rev_dns_src));
 
-		sa = (struct sockaddr *) &sa6;
-		sa_len = sizeof(sa6);
-		hent = gethostbyaddr(&sa6.sin6_addr, sizeof(sa6.sin6_addr), AF_INET6);
 		break;
 	}
 
-	getnameinfo(sa, sa_len, SELFLD(dir, rev_dns_src, rev_dns_dst),
-		    sizeof(n->rev_dns_src), NULL, 0, NI_NUMERICHOST);
+	if (resolve_dns) {
+		dns_resolve_cb_t cb = flow_resolve_dns_src_cb;
 
-	if (hent)
-		strlcpy(SELFLD(dir, rev_dns_src, rev_dns_dst), hent->h_name,
-			sizeof(n->rev_dns_src));
+		if (dir == FLOW_DIR_DST)
+			cb = flow_resolve_dns_dst_cb;
+
+		resolve_hostname_async(n->l3_proto, sock_addr, cb, &n->flow_id);
+	}
+
 }
 
 static void flow_entry_get_extended(struct flow_entry *n)
@@ -1348,6 +1369,7 @@ static void restore_sysctl(void *obj)
 static void on_panic_handler(void *arg)
 {
 	restore_sysctl(arg);
+	dns_resolver_uninit();
 	screen_end();
 }
 
@@ -1647,7 +1669,6 @@ static void *collector(void *null __maybe_unused)
 	rcu_unregister_thread();
 
 	flow_list_destroy(&flow_list);
-	spinlock_destroy(&flow_list.lock);
 
 	nfct_close(ct_event);
 
@@ -1730,6 +1751,9 @@ int main(int argc, char **argv)
 	register_signal(SIGTERM, signal_handler);
 	register_signal(SIGHUP, signal_handler);
 
+	if (resolve_dns && dns_resolver_init())
+		panic("Could not initialize resolver\n");
+
 	panic_handler_add(on_panic_handler, &sysctl);
 
 	conntrack_acct_enable();
@@ -1748,6 +1772,7 @@ int main(int argc, char **argv)
 		destroy_geoip();
 
 	restore_sysctl(&sysctl);
+	dns_resolver_uninit();
 
 	return 0;
 }
