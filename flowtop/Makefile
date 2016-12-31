@@ -23,6 +23,7 @@ flowtop-objs =	xmalloc.o \
 		die.o \
 		sysctl.o \
 		ui.o \
+		dns_resolver.o \
 		flowtop.o
 
 ifeq ($(CONFIG_GEOIP), 1)
