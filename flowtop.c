@@ -130,6 +130,9 @@ static int what = INCLUDE_IPV4 | INCLUDE_IPV6 | INCLUDE_TCP;
 static struct flow_list flow_list;
 static struct sysctl_params_ctx sysctl = { -1, -1 };
 
+static struct nfct_handle *ct_event;
+static struct pollfd poll_fd_event[1];
+
 static unsigned int cols, rows;
 
 static unsigned int interval = 1;
@@ -279,6 +282,12 @@ static void signal_handler(int number)
 
 static void flow_entry_from_ct(struct flow_entry *n, const struct nf_conntrack *ct);
 static void flow_entry_get_extended(struct flow_entry *n);
+
+static void collector_dump_flows(void);
+static void collector_create_filter(struct nfct_handle *nfct);
+static void collector_refresh_flows(struct nfct_handle *handle);
+static int flow_event_cb(enum nf_conntrack_msg_type type,
+			 struct nf_conntrack *ct, void *data __maybe_unused);
 
 static void help(void)
 {
@@ -1248,6 +1257,65 @@ static void flows_table_init(struct ui_table *tbl)
 	ui_table_header_color_set(&flows_tbl, COLOR(BLACK, GREEN));
 }
 
+static void flows_init(void)
+{
+	flow_list_init(&flow_list);
+
+	ct_event = nfct_open(CONNTRACK, NF_NETLINK_CONNTRACK_NEW |
+				      NF_NETLINK_CONNTRACK_UPDATE |
+				      NF_NETLINK_CONNTRACK_DESTROY);
+	if (!ct_event)
+		panic("Cannot create a nfct handle: %s\n", strerror(errno));
+
+	collector_create_filter(ct_event);
+
+	nfct_callback_register(ct_event, NFCT_T_ALL, flow_event_cb, NULL);
+
+	poll_fd_event[0].fd = nfct_fd(ct_event);
+	poll_fd_event[0].events = POLLIN;
+
+	if (fcntl(nfct_fd(ct_event), F_SETFL, O_NONBLOCK) == -1)
+		panic("Cannot set non-blocking socket: fcntl(): %s\n",
+		      strerror(errno));
+
+	collector_dump_flows();
+}
+
+static void flows_update(void)
+{
+	int status;
+
+	if (do_reload_flows) {
+		do_reload_flows = false;
+
+		flow_list_destroy(&flow_list);
+
+		collector_create_filter(ct_event);
+		collector_dump_flows();
+	}
+
+	collector_refresh_flows(ct_event);
+
+	status = poll(poll_fd_event, 1, 0);
+	if (status < 0) {
+		if (errno == EAGAIN || errno == EINTR)
+			return;
+
+		panic("Error while polling: %s\n", strerror(errno));
+	} else if (status == 0) {
+		return;
+	}
+
+	if (poll_fd_event[0].revents & POLLIN)
+		nfct_catch(ct_event);
+}
+
+static void flows_uninit(void)
+{
+	flow_list_destroy(&flow_list);
+	nfct_close(ct_event);
+}
+
 static void presenter(void)
 {
 	bool show_help = false;
@@ -1259,6 +1327,7 @@ static void presenter(void)
 
 	screen = screen_init(false);
 	wclear(screen);
+	halfdelay(1);
 
 	start_color();
 	INIT_COLOR(RED, BLACK);
@@ -1269,7 +1338,6 @@ static void presenter(void)
 
         flows_table_init(&flows_tbl);
 
-	rcu_register_thread();
 	while (!sigint) {
 		int ch;
 
@@ -1342,9 +1410,8 @@ static void presenter(void)
 
 		draw_footer();
 
-		usleep(80000);
+		flows_update();
 	}
-	rcu_unregister_thread();
 
 	ui_table_uninit(&flows_tbl);
 
@@ -1608,77 +1675,9 @@ static void collector_dump_flows(void)
 	nfct_close(nfct);
 }
 
-static void *collector(void *null __maybe_unused)
-{
-	struct nfct_handle *ct_event;
-	struct pollfd poll_fd[1];
-
-	flow_list_init(&flow_list);
-
-	ct_event = nfct_open(CONNTRACK, NF_NETLINK_CONNTRACK_NEW |
-				      NF_NETLINK_CONNTRACK_UPDATE |
-				      NF_NETLINK_CONNTRACK_DESTROY);
-	if (!ct_event)
-		panic("Cannot create a nfct handle: %s\n", strerror(errno));
-
-	collector_create_filter(ct_event);
-
-	nfct_callback_register(ct_event, NFCT_T_ALL, flow_event_cb, NULL);
-
-	poll_fd[0].fd = nfct_fd(ct_event);
-	poll_fd[0].events = POLLIN;
-
-	if (fcntl(nfct_fd(ct_event), F_SETFL, O_NONBLOCK) == -1)
-		panic("Cannot set non-blocking socket: fcntl(): %s\n",
-		      strerror(errno));
-
-	rcu_register_thread();
-
-	collector_dump_flows();
-
-	while (!sigint) {
-		int status;
-
-		if (!do_reload_flows) {
-			usleep(USEC_PER_SEC * interval);
-		} else {
-			do_reload_flows = false;
-
-			flow_list_destroy(&flow_list);
-
-			collector_create_filter(ct_event);
-			collector_dump_flows();
-		}
-
-		collector_refresh_flows(ct_event);
-
-		status = poll(poll_fd, 1, 0);
-		if (status < 0) {
-			if (errno == EAGAIN || errno == EINTR)
-				continue;
-
-			panic("Error while polling: %s\n", strerror(errno));
-		} else if (status == 0) {
-			continue;
-		}
-
-		if (poll_fd[0].revents & POLLIN)
-			nfct_catch(ct_event);
-	}
-
-	rcu_unregister_thread();
-
-	flow_list_destroy(&flow_list);
-
-	nfct_close(ct_event);
-
-	pthread_exit(NULL);
-}
-
 int main(int argc, char **argv)
 {
-	pthread_t tid;
-	int ret, c, what_cmd = 0;
+	int c, what_cmd = 0;
 
 	setfsuid(getuid());
 	setfsgid(getgid());
@@ -1744,8 +1743,6 @@ int main(int argc, char **argv)
 			what |= INCLUDE_IPV4 | INCLUDE_IPV6;
 	}
 
-	rcu_init();
-
 	register_signal(SIGINT, signal_handler);
 	register_signal(SIGQUIT, signal_handler);
 	register_signal(SIGTERM, signal_handler);
@@ -1762,9 +1759,7 @@ int main(int argc, char **argv)
 	if (resolve_geoip)
 		init_geoip(1);
 
-	ret = pthread_create(&tid, NULL, collector, NULL);
-	if (ret < 0)
-		panic("Cannot create phthread!\n");
+	flows_init();
 
 	presenter();
 
@@ -1773,6 +1768,7 @@ int main(int argc, char **argv)
 
 	restore_sysctl(&sysctl);
 	dns_resolver_uninit();
+	flows_uninit();
 
 	return 0;
 }
