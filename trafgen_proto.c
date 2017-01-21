@@ -527,6 +527,11 @@ void proto_field_set_be32(struct proto_field *field, uint32_t val)
 	__proto_field_set_bytes(field, (uint8_t *)&val, 4, false, true);
 }
 
+void proto_field_set_bytes(struct proto_field *field, const uint8_t *bytes, size_t len)
+{
+	__proto_field_set_bytes(field, bytes, len, false, false);
+}
+
 void protos_init(const char *dev)
 {
 	ctx.dev = dev;
