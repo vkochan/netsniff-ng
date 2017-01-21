@@ -100,6 +100,9 @@ void proto_header_fields_add(struct proto_hdr *hdr,
 		f->pkt_offset = hdr->pkt_offset + fields[i].offset;
 		f->hdr = hdr;
 
+		if (!f->len)
+			continue;
+
 		if (f->pkt_offset + f->len > pkt->len) {
 			hdr->len += f->len;
 			set_fill(0, (f->pkt_offset + f->len) - pkt->len);
@@ -181,6 +184,45 @@ set_proto:
 	return current;
 }
 
+static void __proto_field_relocate(struct proto_field *field)
+{
+	struct proto_hdr *hdr = field->hdr;
+	struct packet *pkt = packet_get(hdr->pkt_id);
+	uint8_t *from, *to;
+	int i;
+
+	/* If this is a last field then just calculate 'pkt_offset' */
+	if (field->id == hdr->fields_count - 1) {
+		field->pkt_offset = hdr->pkt_offset + hdr->len - field->len;
+		return;
+	}
+
+	/* Use 'pkt_offset' from the 1st real (len > 0) field after the
+	 * 'target' one */
+	for (i = field->id + 1; i < hdr->fields_count; i++) {
+		if (hdr->fields[i].len == 0)
+			continue;
+
+		field->pkt_offset = hdr->fields[i].pkt_offset;
+		break;
+	}
+
+	/* Move payload of overlapped fields (each after the 'target' field) */
+	from = &pkt->payload[field->pkt_offset];
+	to = &pkt->payload[field->pkt_offset + field->len];
+	memcpy(to, from, hdr->len - field->len);
+
+	/* Recalculate 'pkt_offset' of the rest fields */
+	for (; i < hdr->fields_count; i++) {
+		struct proto_field *tmp = &hdr->fields[i];
+
+		if (tmp->len == 0)
+			continue;
+
+		tmp->pkt_offset += field->len;
+	}
+}
+
 static void __proto_field_set_bytes(struct proto_field *field,
 				    const uint8_t *bytes, size_t len,
 				    bool is_default, bool is_be)
@@ -194,6 +236,14 @@ static void __proto_field_set_bytes(struct proto_field *field,
 
 	if (is_default && field->is_set)
 		return;
+
+	if (field->len == 0) {
+		field->hdr->len += len;
+		field->len = len;
+		set_fill(0, len);
+
+		__proto_field_relocate(field);
+	}
 
 	payload = &packet_get(field->hdr->pkt_id)->payload[field->pkt_offset];
 
