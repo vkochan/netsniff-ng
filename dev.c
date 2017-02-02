@@ -430,3 +430,21 @@ const char *device_addr2str(const unsigned char *addr, int alen, int type,
 
 	return buf;
 }
+
+bool device_is_ether(const char *ifname)
+{
+	switch (device_type(ifname)) {
+	case ARPHRD_TUNNEL:
+	case ARPHRD_TUNNEL6:
+	case ARPHRD_LOOPBACK:
+	case ARPHRD_SIT:
+	case ARPHRD_IPDDP:
+	case ARPHRD_IPGRE:
+	case ARPHRD_IP6GRE:
+	case ARPHRD_ETHER:
+		return true;
+
+	default:
+		return false;
+	}
+}

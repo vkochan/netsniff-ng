@@ -1,6 +1,7 @@
 #ifndef DEV_H
 #define DEV_H
 
+#include <stdbool.h>
 #include <sys/socket.h>
 #include "built_in.h"
 
@@ -19,4 +20,7 @@ extern void device_leave_promiscuous_mode(const char *ifname, short oldflags);
 extern const char *device_type2str(uint16_t type);
 extern const char *device_addr2str(const unsigned char *addr, int alen, int type,
 				   char *buf, int blen);
+
+extern bool device_is_ether(const char *ifname);
+
 #endif /* DEV_H */
