@@ -48,6 +48,7 @@ struct ui_table {
 	const char *delim;
 
 	void (* data_bind)(struct ui_table *tbl, int col_id, const void *data);
+	void * (* data_next)(struct ui_table *tbl, void *data);
 };
 
 struct ui_tab;
@@ -68,6 +69,19 @@ struct ui_tab {
 	ui_tab_event_cb on_tab_event;
 };
 
+#define ui_table_row_next(__ptr, __head, __entry) \
+({ \
+	__typeof__(*__ptr) * n; \
+	struct cds_list_head *h; \
+	if (!n) \
+		h = rcu_dereference(head->next); \
+	else if (rcu_dereference(n->__entry.next) == head) \
+		return NULL; \
+	else \
+		h = rcu_dereference(n->__entry.next); \
+	cds_list_entry(h, __typeof(* __ptr), __entry); \
+})
+
 extern void ui_table_init(struct ui_table *tbl);
 extern void ui_table_uninit(struct ui_table *tbl);
 extern void ui_table_clear(struct ui_table *tbl);
@@ -84,6 +98,10 @@ extern void ui_table_data_bind_set(struct ui_table *tbl,
 					void (* data_bind)(struct ui_table
 						*tbl, int col_id, const void *data));
 extern void ui_table_row_bind(struct ui_table *tbl, const void *data);
+extern void ui_table_bind(struct ui_table *tbl);
+extern void ui_table_data_iter_set(struct ui_table *tbl,
+					void * (* data_next)(struct ui_table *tbl,
+					       	void *data));
 
 extern void ui_table_row_add(struct ui_table *tbl);
 extern int ui_table_rows_count(const struct ui_table *tbl);

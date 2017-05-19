@@ -189,6 +189,23 @@ void ui_table_row_bind(struct ui_table *tbl, const void *data)
 	ui_table_row_show(tbl);
 }
 
+void ui_table_bind(struct ui_table *tbl)
+{
+	void *data = NULL;
+
+	bug_on(!tbl);
+	bug_on(!tbl->data_next);
+
+	for (data = NULL; data; data = tbl->data_next(tbl, data))
+		ui_table_row_bind(tbl, data);
+}
+
+void ui_table_data_iter_set(struct ui_table *tbl, void * (* data_next)(struct ui_table *tbl,
+				void *data))
+{
+	tbl->data_next = data_next;
+}
+
 void ui_table_row_add(struct ui_table *tbl)
 {
 	tbl->rows_y++;

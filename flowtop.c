@@ -1352,6 +1352,17 @@ static void flows_data_bind(struct ui_table *tbl, int col_id, const void *data)
 	}
 }
 
+void * flows_next_get(struct ui_table *tbl, void *data)
+{
+	struct flow_entry *n = data;
+
+	do {
+		n = ui_table_next_row(n, &flow_list.head, entry);
+	} while (n && (!n->is_visible || presenter_flow_wrong_state(n)));
+
+	return n;
+}
+
 static void flows_table_init(struct ui_table *tbl)
 {
 	ui_table_init(tbl);
@@ -1381,6 +1392,7 @@ static void flows_table_init(struct ui_table *tbl)
 	ui_table_header_color_set(&flows_tbl, COLOR(BLACK, GREEN));
 
 	ui_table_data_bind_set(&flows_tbl, flows_data_bind);
+	ui_table_data_iter_set(&flows_tbl, flows_next_get);
 }
 
 static void procs_data_bind(struct ui_table *tbl, int col_id, const void *data)
@@ -1425,6 +1437,13 @@ static void procs_data_bind(struct ui_table *tbl, int col_id, const void *data)
 	}
 }
 
+void * procs_next_get(struct ui_table *tbl, void *data)
+{
+	struct proc_entry *p = data;
+
+	return ui_table_next_row(p, &proc_list.head, entry);
+}
+
 static void procs_table_init(struct ui_table *tbl)
 {
 	ui_table_init(tbl);
@@ -1456,6 +1475,7 @@ static void procs_table_init(struct ui_table *tbl)
 	ui_table_header_color_set(tbl, COLOR(BLACK, GREEN));
 
 	ui_table_data_bind_set(tbl, procs_data_bind);
+	ui_table_data_iter_set(tbl, procs_next_get);
 }
 
 static void tab_main_on_open(struct ui_tab *tab, enum ui_tab_event_t evt, uint32_t id)
