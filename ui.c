@@ -65,6 +65,7 @@ void ui_table_init(struct ui_table *tbl)
 	tbl->col_pad = 1;
 	tbl->row     = ui_text_alloc(tbl->width);
 	tbl->delim   = " ";
+	tbl->row_height = 1;
 
 	CDS_INIT_LIST_HEAD(&tbl->cols);
 }
@@ -192,18 +193,28 @@ void ui_table_row_bind(struct ui_table *tbl, const void *data)
 void ui_table_bind(struct ui_table *tbl)
 {
 	void *data = NULL;
+	int i;
 
 	bug_on(!tbl);
 	bug_on(!tbl->data_next);
 
-	for (data = NULL; data; data = tbl->data_next(tbl, data))
+	for (i = 0, data = NULL; data; data = tbl->data_next(tbl, data)) {
+		if (i++ < tbl->scroll_y)
+			continue;
+
 		ui_table_row_bind(tbl, data);
+	}
 }
 
 void ui_table_data_iter_set(struct ui_table *tbl, void * (* data_next)(struct ui_table *tbl,
 				void *data))
 {
 	tbl->data_next = data_next;
+}
+
+void ui_table_row_height_set(struct ui_table *tbl, int height)
+{
+	tbl->row_height = height;
 }
 
 void ui_table_row_add(struct ui_table *tbl)
@@ -275,6 +286,44 @@ void ui_table_event_send(struct ui_table *tbl, enum ui_event_id evt_id)
 		tbl->scroll_x -= SCROLL_X_STEP;
 		if (tbl->scroll_x < 0)
 			tbl->scroll_x = 0;
+	}
+
+	switch (evt_id) {
+	case UI_EVT_SCROLL_RIGHT:
+		tbl->scroll_x += SCROLL_X_STEP;
+		break;
+
+	case UI_EVT_SCROLL_LEFT:
+		tbl->scroll_x -= SCROLL_X_STEP;
+		if (tbl->scroll_x < 0)
+			tbl->scroll_x = 0;
+		break;
+
+	case UI_EVT_SCROLL_PAGE_UP:
+		tbl->scroll_y -= tbl->height;
+		if (tbl->scroll_y < 0)
+			tbl->scroll_y = 0;
+		break;
+
+	case UI_EVT_SCROLL_UP:
+		tbl->scroll_y--;
+		if (tbl->scroll_y < 0)
+			tbl->scroll_y = 0;
+		break;
+
+	case UI_EVT_SCROLL_PAGE_DOWN:
+		tbl->scroll_y += tbl->height;
+		if (tbl->scroll_y * tbl->row_height >= ui_table_rows_count(tbl))
+			tbl->scroll_y -= tbl->height;
+		break;
+
+	case UI_EVT_SCROLL_DOWN:
+		tbl->scroll_y++;
+		if (tbl->scroll_y * tbl->row_height >= ui_table_rows_count(tbl))
+			tbl->scroll_y--;
+		break;
+	default: /* pass the rest events */
+		return;
 	}
 }
 

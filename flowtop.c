@@ -1003,6 +1003,8 @@ static void print_flow_peer_info(const struct flow_entry *n, enum flow_direction
 
 static void draw_flow_entry(const struct flow_entry *n)
 {
+	ui_table_row_height_set(&flows_tbl, show_src ? 2 : 1);
+
 	print_flow_peer_info(n, show_src ? FLOW_DIR_SRC : FLOW_DIR_DST);
 
 	if (show_src)

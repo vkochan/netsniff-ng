@@ -9,6 +9,10 @@
 enum ui_event_id {
 	UI_EVT_SCROLL_LEFT,
 	UI_EVT_SCROLL_RIGHT,
+	UI_EVT_SCROLL_UP,
+	UI_EVT_SCROLL_DOWN,
+	UI_EVT_SCROLL_PAGE_UP,
+	UI_EVT_SCROLL_PAGE_DOWN,
 	UI_EVT_SELECT_NEXT,
 };
 
@@ -40,11 +44,13 @@ struct ui_table {
 	int rows_y;
 	struct cds_list_head cols;
 	struct ui_text *row;
+	int row_height;
 	int hdr_color;
 	int col_pad;
 	int width;
 	int height;
 	int scroll_x;
+	int scroll_y;
 	const char *delim;
 
 	void (* data_bind)(struct ui_table *tbl, int col_id, const void *data);
@@ -69,17 +75,16 @@ struct ui_tab {
 	ui_tab_event_cb on_tab_event;
 };
 
-#define ui_table_row_next(__ptr, __head, __entry) \
+#define ui_table_next_row(__ptr, __head, __entry) \
 ({ \
-	__typeof__(*__ptr) * n; \
 	struct cds_list_head *h; \
-	if (!n) \
-		h = rcu_dereference(head->next); \
-	else if (rcu_dereference(n->__entry.next) == head) \
+	if (!__ptr) \
+		h = rcu_dereference((__head)->next); \
+	else if (rcu_dereference(__ptr->__entry.next) == (__head)) \
 		return NULL; \
 	else \
-		h = rcu_dereference(n->__entry.next); \
-	cds_list_entry(h, __typeof(* __ptr), __entry); \
+		h = rcu_dereference(__ptr->__entry.next); \
+	cds_list_entry(h, __typeof(* (__ptr)), __entry); \
 })
 
 extern void ui_table_init(struct ui_table *tbl);
@@ -103,6 +108,7 @@ extern void ui_table_data_iter_set(struct ui_table *tbl,
 					void * (* data_next)(struct ui_table *tbl,
 					       	void *data));
 
+extern void ui_table_row_height_set(struct ui_table *tbl, int height);
 extern void ui_table_row_add(struct ui_table *tbl);
 extern int ui_table_rows_count(const struct ui_table *tbl);
 extern void ui_table_row_show(struct ui_table *tbl);
