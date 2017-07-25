@@ -1284,8 +1284,8 @@ int main(int argc, char **argv)
 
 	protos_init(ctx.dev_out);
 
-	if (shaper_is_set(&ctx.sh) || (ctx.dev_in && dev_io_is_pcap(ctx.dev_in))
-	    || dev_io_is_pcap(ctx.dev_out)) {
+	if (shaper_is_set(&ctx.sh) || (ctx.dev_in && !dev_io_is_netdev(ctx.dev_in))
+	    || !dev_io_is_netdev(ctx.dev_out)) {
 
 		prctl(PR_SET_TIMERSLACK, 1UL);
 		/* Fall back to single core to not mess up correct timing.
